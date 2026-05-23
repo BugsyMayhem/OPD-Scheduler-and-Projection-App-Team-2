@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+pdfplumber
+pandas
+gspread
+oauth2client
+pydantic
+python-dotenv

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Walmart OPD Scheduler</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- PDF Generation Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel">
+            <div class="brand">
+                <i class="fa-solid fa-sparkles spark-icon"></i>
+                <h2>OPD Scheduler</h2>
+            </div>
+
+            <div class="db-status card">
+                <h3><i class="fa-solid fa-database"></i> Database Status</h3>
+                <p id="lastSyncTime" class="sync-time">Syncing...</p>
+                <button id="syncBtn" class="btn btn-outline">
+                    <i class="fa-solid fa-rotate"></i> Sync Database
+                </button>
+            </div>
+
+            <div class="actions card">
+                <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Actions</h3>
+                <label for="pdfUpload" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-file-pdf"></i> Upload Roster PDF
+                </label>
+                <input type="file" id="pdfUpload" accept=".pdf" style="display: none;">
+
+                <button id="calcLunchesBtn" class="btn btn-secondary btn-block mt-2" disabled>
+                    <i class="fa-solid fa-utensils"></i> Generate Lunches
+                </button>
+                <button id="downloadPdfBtn" class="btn btn-outline btn-block mt-2" disabled>
+                    <i class="fa-solid fa-file-pdf"></i> Download PDF
+                </button>
+                <button id="clearPdfBtn" class="btn btn-outline btn-block mt-2" disabled style="color: #ef4444; border-color: #ef4444;">
+                    <i class="fa-solid fa-trash-can"></i> Clear PDF
+                </button>
+            </div>
+
+            <div class="stats card">
+                <h3><i class="fa-solid fa-chart-pie"></i> Today's Coverage</h3>
+                <div class="stat-row">
+                    <span><i class="fa-solid fa-cart-shopping"></i> Pickers</span>
+                    <span id="pickerCount" class="badge badge-Picker">0</span>
+                </div>
+                <div class="stat-row">
+                    <span><i class="fa-solid fa-box"></i> Backroom</span>
+                    <span id="backroomCount" class="badge badge-Backroom">0</span>
+                </div>
+                <div class="stat-row">
+                    <span><i class="fa-solid fa-triangle-exclamation"></i> Exceptions</span>
+                    <span id="exceptionCount" class="badge badge-Exceptions">0</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-nav glass-panel">
+                <h1>Daily Roster</h1>
+                <div class="user-profile">
+                    <span class="avatar">WM</span>
+                </div>
+            </header>
+
+            <div class="tab-nav">
+                <button class="tab-btn active" data-target="rosterView"><i class="fa-solid fa-calendar-days"></i> Roster
+                    Builder</button>
+                <button class="tab-btn" data-target="coverageView"><i class="fa-solid fa-chart-line"></i> Hourly
+                    Coverage</button>
+                <button class="tab-btn" data-target="databaseView"><i class="fa-solid fa-users"></i> Associate
+                    Database</button>
+
+            </div>
+
+            <div id="mismatchAlert" class="alert alert-warning hidden">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <div>
+                    <strong>Warning! Need Action</strong>
+                    <p id="mismatchText">These names were found in the PDF but not in the database: </p>
+                    <button id="quickAddBtn" class="btn btn-primary"
+                        style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                        <i class="fa-solid fa-user-plus"></i> Quick Add to Database
+                    </button>
+                </div>
+                <button class="close-btn"
+                    onclick="document.getElementById('mismatchAlert').classList.add('hidden')">&times;</button>
+            </div>
+
+            <!-- VIEW: Roster Builder -->
+            <div id="rosterView" class="view-section">
+
+                <div class="roster-container glass-panel">
+                    <div class="table-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2><i class="fa-solid fa-clipboard-list"></i> Associates Schedule</h2>
+                        <button id="openManualAddBtn" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                            <i class="fa-solid fa-plus"></i> Manual Add
+                        </button>
+                    </div>
+                    <div class="table-responsive">
+                        <table id="rosterTable">
+                            <thead>
+                                <tr>
+                                    <th>Associate</th>
+                                    <th>Role</th>
+                                    <th>Shift</th>
+                                    <th>Lunch Time</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rosterBody">
+                                <tr class="empty-state" id="emptyRow">
+                                    <td colspan="5">
+                                        <div class="empty-content">
+                                            <i class="fa-duotone fa-file-pdf fa-3x"
+                                                style="font-size: 3rem; margin-bottom: 1rem;"></i>
+                                            <p>Upload a PDF schedule to generate the roster</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div> <!-- End Roster View -->
+
+            <!-- VIEW: Hourly Coverage -->
+            <div id="coverageView" class="view-section hidden">
+                <div class="roster-container glass-panel" id="coverageContainer" style="height: 100%;">
+                    <div class="table-header">
+                        <h2><i class="fa-solid fa-chart-bar"></i> Hourly Coverage</h2>
+                    </div>
+                    <div class="table-responsive">
+                        <table id="coverageTable">
+                            <thead>
+                                <tr>
+                                    <th>Hour</th>
+                                    <th>Pickers (Rate: 75)</th>
+                                    <th>Backroom (Rate: 5)</th>
+                                    <th>Exceptions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="coverageBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div> <!-- End Coverage View -->
+
+
+
+
+            <!-- VIEW: Associate Database -->
+            <div id="databaseView" class="view-section hidden">
+                <div class="roster-container glass-panel" style="height: 100%;">
+                    <div class="table-header"
+                        style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2><i class="fa-solid fa-users"></i> Synced Google Sheet Database</h2>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
+                            <button id="saveBatchBtn" class="btn btn-primary"
+                                style="font-size: 0.85rem; padding: 0.4rem 0.8rem; background-color: #10b981; border-color: #10b981;">
+                                <i class="fa-solid fa-floppy-disk"></i> Save Changes
+                            </button>
+                            <button id="deleteSelectedBtn" class="btn btn-primary"
+                                style="font-size: 0.85rem; padding: 0.4rem 0.8rem; background-color: #ef4444; border-color: #ef4444;">
+                                <i class="fa-solid fa-trash"></i> Delete Selected
+                            </button>
+                            <button id="addAssocBtn" class="btn btn-primary"
+                                style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                                <i class="fa-solid fa-plus"></i> Add Associate
+                            </button>
+                            <a href="https://docs.google.com/spreadsheets/d/1C-b4TtOa_8XywfnVCchv03610wkeYj6dsxbx_ZOG50I/edit"
+                                target="_blank" class="btn btn-outline"
+                                style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                                <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Google Sheet
+                            </a>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table id="dbTable">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllCheckbox"></th>
+                                    <th>Name</th>
+                                    <th>Employment Type</th>
+                                    <th>Minor</th>
+                                    <th>Exclude</th>
+                                    <th>Role</th>
+                                    <th>PPH</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dbBody">
+                                <tr class="empty-state">
+                                    <td colspan="8">
+                                        <div class="empty-content">
+                                            <i class="fa-solid fa-spinner fa-spin fa-2x"></i>
+                                            <p>Loading database...</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div> <!-- End Database View -->
+
+            <!-- Manual Add Modal -->
+            <div id="manualAddModal" class="modal hidden">
+                <div class="modal-content glass-panel" style="max-width: 400px; width: 100%;">
+                    <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1rem;">
+                        <h3 style="margin: 0;"><i class="fa-solid fa-user-plus"></i> Add to Roster</h3>
+                        <button id="closeManualAddBtn" class="btn-icon" style="color: #fff; background: none; border: none; font-size: 1.2rem; cursor: pointer;">&times;</button>
+                    </div>
+                    <div class="modal-body" style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">Associate (From DB)</label>
+                            <select id="manualAddSelect" class="db-input" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 4px;">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 1rem;">
+                            <div style="flex: 1;">
+                                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">Start Time</label>
+                                <input type="time" id="manualAddStart" class="db-input" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 4px;">
+                            </div>
+                            <div style="flex: 1;">
+                                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">End Time</label>
+                                <input type="time" id="manualAddEnd" class="db-input" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 4px;">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top: 1.5rem; text-align: right;">
+                        <button id="submitManualAddBtn" class="btn btn-primary btn-block">Add to Schedule</button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
