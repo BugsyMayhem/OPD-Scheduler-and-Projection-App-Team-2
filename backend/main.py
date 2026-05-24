@@ -153,7 +153,7 @@ def calculate_lunches(payload: RosterPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Mount static files (frontend)
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
