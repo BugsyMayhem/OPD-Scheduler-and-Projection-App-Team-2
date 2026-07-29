@@ -39,21 +39,29 @@ db_cache = {
 }
 
 def get_gspread_client():
-    # Try reading from environment variable first (e.g. on Render)
+    # Try reading from environment variable first
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("CREDENTIALS_JSON")
     if creds_json:
         creds_dict = json.loads(creds_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
         return gspread.authorize(creds)
 
-    # Fallback to local credentials.json file
+    # Fallback to credentials.json file (check multiple locations including Render's Secret Files)
     creds_filename = os.getenv("CREDENTIALS_PATH", "credentials.json")
-    creds_path = os.path.join(os.path.dirname(__file__), creds_filename)
-    if os.path.exists(creds_path):
-        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, SCOPE)
-        return gspread.authorize(creds)
+    candidate_paths = [
+        os.path.join("/etc/secrets", os.path.basename(creds_filename)),
+        "/etc/secrets/credentials.json",
+        creds_filename,
+        os.path.join(os.path.dirname(__file__), creds_filename),
+        os.path.join(os.path.dirname(__file__), "..", creds_filename)
+    ]
+    
+    for path in candidate_paths:
+        if os.path.exists(path):
+            creds = ServiceAccountCredentials.from_json_keyfile_name(path, SCOPE)
+            return gspread.authorize(creds)
         
-    raise FileNotFoundError(f"Missing Google Credentials. Neither GOOGLE_CREDENTIALS_JSON env var nor {creds_path} was found.")
+    raise FileNotFoundError(f"Missing Google Credentials file. Checked: {candidate_paths}")
 
 
 def sync_sheets():
