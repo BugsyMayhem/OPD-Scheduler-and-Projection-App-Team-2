@@ -9,7 +9,10 @@ import json
 from typing import List, Dict, Any, Optional
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from parser import process_pdf, calculate_staggered_lunches
+try:
+    from parser import process_pdf, calculate_staggered_lunches
+except ImportError:
+    from backend.parser import process_pdf, calculate_staggered_lunches
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -36,12 +39,21 @@ db_cache = {
 }
 
 def get_gspread_client():
+    # Try reading from environment variable first (e.g. on Render)
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("CREDENTIALS_JSON")
+    if creds_json:
+        creds_dict = json.loads(creds_json)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+        return gspread.authorize(creds)
+
+    # Fallback to local credentials.json file
     creds_filename = os.getenv("CREDENTIALS_PATH", "credentials.json")
     creds_path = os.path.join(os.path.dirname(__file__), creds_filename)
-    if not os.path.exists(creds_path):
-        raise FileNotFoundError(f"Missing {creds_path}. Please upload your Service Account JSON key.")
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, SCOPE)
-    return gspread.authorize(creds)
+    if os.path.exists(creds_path):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, SCOPE)
+        return gspread.authorize(creds)
+        
+    raise FileNotFoundError(f"Missing Google Credentials. Neither GOOGLE_CREDENTIALS_JSON env var nor {creds_path} was found.")
 
 
 def sync_sheets():
