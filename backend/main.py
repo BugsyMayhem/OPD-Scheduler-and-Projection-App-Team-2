@@ -10,13 +10,16 @@ from typing import List, Dict, Any, Optional
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 try:
-    from parser import process_pdf, calculate_staggered_lunches
+    from parser import process_pdf, process_csv, calculate_staggered_lunches
 except ImportError:
-    from backend.parser import process_pdf, calculate_staggered_lunches
+    from backend.parser import process_pdf, process_csv, calculate_staggered_lunches
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+backend_env = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(backend_env):
+    load_dotenv(backend_env, override=True)
+load_dotenv(override=True)
 
 app = FastAPI()
 
@@ -31,7 +34,9 @@ app.add_middleware(
 # Google Sheets setup
 SCOPE = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
          "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
-SHEET_ID = os.getenv("SHEET_ID", "1C-b4TtOa_8XywfnVCchv03610wkeYj6dsxbx_ZOG50I")
+
+def get_sheet_id() -> str:
+    return os.getenv("SHEET_ID", "1IwnNimOKM_COtfict4eHbeWjgsRXXN-e2m-DGn-ywH4")
 
 db_cache = {
     "associates_df": pd.DataFrame(),
@@ -67,13 +72,19 @@ def get_gspread_client():
 def sync_sheets():
     try:
         client = get_gspread_client()
-        sheet = client.open_by_key(SHEET_ID).sheet1
+        sheet_id = get_sheet_id()
+        sheet = client.open_by_key(sheet_id).sheet1
         data = sheet.get_all_records()
         
         df = pd.DataFrame(data)
         db_cache["associates_df"] = df
         db_cache["last_sync"] = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M %p")
-        return {"status": "success", "last_sync": db_cache["last_sync"]}
+        return {
+            "status": "success",
+            "last_sync": db_cache["last_sync"],
+            "sheet_id": sheet_id,
+            "sheet_url": f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+        }
     except Exception as e:
         print(f"Failed to sync sheets: {e}")
         return {"status": "error", "message": str(e)}
@@ -91,12 +102,14 @@ def get_associates():
     if db_cache["associates_df"].empty:
         sync_sheets()
     df = db_cache["associates_df"]
+    sheet_id = get_sheet_id()
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     if df.empty:
-        return {"associates": [], "last_sync": db_cache["last_sync"]}
+        return {"associates": [], "last_sync": db_cache["last_sync"], "sheet_id": sheet_id, "sheet_url": sheet_url}
     
     # Send row index along with data so we know which row to update
     data = df.fillna("").reset_index().rename(columns={"index": "row_index"}).to_dict('records')
-    return {"associates": data, "last_sync": db_cache["last_sync"]}
+    return {"associates": data, "last_sync": db_cache["last_sync"], "sheet_id": sheet_id, "sheet_url": sheet_url}
 
 class AssociateBatchUpdate(BaseModel):
     associates: List[Dict[str, Any]]
@@ -105,14 +118,17 @@ class AssociateBatchUpdate(BaseModel):
 def batch_update_associates(payload: AssociateBatchUpdate):
     try:
         client = get_gspread_client()
-        sheet = client.open_by_key(SHEET_ID).sheet1
+        sheet_id = get_sheet_id()
+        sheet = client.open_by_key(sheet_id).sheet1
         
-        headers = sheet.row_values(1)
+        headers = [h for h in sheet.row_values(1) if h != "PPH"]
         if not headers:
-            headers = ["Name", "Status", "Employment Type", "Minor Status", "Exclude", "Completed", "Role", "PPH"]
-            
-        if "PPH" not in headers:
-            headers.append("PPH")
+            headers = ["Name", "User ID", "Status", "Employment Type", "Minor Status", "Exclude", "Completed", "Role"]
+        elif "User ID" not in headers:
+            if "Name" in headers:
+                headers.insert(headers.index("Name") + 1, "User ID")
+            else:
+                headers.insert(1, "User ID")
             
         row_data = [headers]
         
@@ -143,23 +159,29 @@ def batch_update_associates(payload: AssociateBatchUpdate):
 
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
+    filename_lower = file.filename.lower()
+    if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
+        raise HTTPException(status_code=400, detail="File must be a PDF or CSV schedule")
         
     if db_cache["associates_df"].empty:
         sync_sheets()
         
     contents = await file.read()
-    pdf_file = io.BytesIO(contents)
+    file_bytes = io.BytesIO(contents)
     
     try:
-        roster_data, mismatches = process_pdf(pdf_file, db_cache["associates_df"])
+        if filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls"):
+            is_excel = filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")
+            roster_data, mismatches = process_csv(file_bytes, db_cache["associates_df"], is_excel=is_excel)
+        else:
+            roster_data, mismatches = process_pdf(file_bytes, db_cache["associates_df"])
+            
         return {
             "roster": roster_data,
             "mismatches": mismatches
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF Processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Schedule processing failed: {str(e)}")
 
 class RosterPayload(BaseModel):
     roster: List[Dict[str, Any]]

@@ -26,6 +26,8 @@ Thumbs.db
 __pycache__/
 *.pyc
 credentials.json
+backend/credentials.json
+*.csv
 
 # Logs
 npm-debug.log*

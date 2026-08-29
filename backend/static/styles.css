@@ -192,7 +192,8 @@ body {
     font-weight: bold;
 }
 
-.badge-Picker {
+.badge-Picker,
+.badge-Pickers {
     background: #ffebee;
     color: #c62828;
 }
@@ -205,6 +206,12 @@ body {
 .badge-Exceptions {
     background: #fff8e1;
     color: #f57f17;
+}
+
+.badge-IPGMD,
+.badge-IP-GMD {
+    background: #fff3e0;
+    color: #e65100;
 }
 
 /* Tabs */
@@ -435,9 +442,17 @@ tr:hover td {
 }
 
 .lunch-select.lunch-warning {
-    color: red;
+    color: #c62828 !important;
     font-weight: bold;
-    border-color: red;
+    border-color: #ef9a9a !important;
+    background-color: #ffebee !important;
+}
+
+.lunch-select.break-warning {
+    color: #c2185b !important;
+    font-weight: bold;
+    border-color: #f48fb1 !important;
+    background-color: #fce4ec !important;
 }
 
 .lunch-select:focus {
@@ -452,7 +467,7 @@ tr:hover td {
     background: transparent;
     color: #333;
     font-family: inherit;
-    width: 100px;
+    width: 155px;
     font-size: 0.9rem;
     transition: all 0.2s;
 }

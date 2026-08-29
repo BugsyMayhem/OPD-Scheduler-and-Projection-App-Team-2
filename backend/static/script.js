@@ -27,7 +27,7 @@ const dbBody = document.getElementById('dbBody');
 
 // Modal Elements removed
 
-const ROLES = ["Pickers", "Backroom", "Exceptions", "Exclude"];
+const ROLES = ["Pickers", "Backroom", "Exceptions", "IP/GMD", "Exclude"];
 
 
 
@@ -71,12 +71,18 @@ async function loadDatabase() {
         const res = await fetch(`${API_BASE}/associates`);
         const data = await res.json();
 
+        if (data.sheet_url) {
+            const openSheetBtn = document.getElementById('openSheetBtn');
+            if (openSheetBtn) openSheetBtn.href = data.sheet_url;
+        }
+
         if (data.associates && data.associates.length > 0) {
             window.cachedAssociates = data.associates;
             dbBody.innerHTML = '';
             data.associates.forEach(assoc => {
                 dbBody.appendChild(createDbRow(assoc));
             });
+            filterDatabaseTable();
             if (typeof main_df !== 'undefined' && main_df.length > 0) {
                 renderRoster();
             }
@@ -101,12 +107,7 @@ function createDbRow(assoc) {
     tr.innerHTML = `
         <td style="text-align: center;"><input type="checkbox" class="row-select"></td>
         <td><input type="text" class="db-input db-name" value="${assoc.Name || ''}" placeholder="Name"></td>
-        <td>
-            <select class="db-input db-type">
-                <option value="Part-Time" ${assoc['Employment Type'] === 'Part-Time' ? 'selected' : ''}>Part-Time</option>
-                <option value="Full-Time" ${assoc['Employment Type'] === 'Full-Time' ? 'selected' : ''}>Full-Time</option>
-            </select>
-        </td>
+        <td><input type="text" class="db-input db-userid" value="${assoc['User ID'] || assoc.UserID || ''}" placeholder="User ID" style="width: 90px;"></td>
         <td>
             <select class="db-input db-minor">
                 <option value="No" ${(assoc['Minor Status'] || 'No').toLowerCase() === 'no' ? 'selected' : ''}>No</option>
@@ -124,10 +125,8 @@ function createDbRow(assoc) {
                 <option value="" ${(!role || role === 'Picker' || role === 'Pickers' || role === '') ? 'selected' : ''}>Default (Picker)</option>
                 <option value="Backroom" ${role === 'Backroom' ? 'selected' : ''}>Backroom</option>
                 <option value="Exceptions" ${role === 'Exceptions' ? 'selected' : ''}>Exceptions</option>
+                <option value="IP/GMD" ${role === 'IP/GMD' ? 'selected' : ''}>IP/GMD</option>
             </select>
-        </td>
-        <td>
-            <input type="text" inputmode="numeric" class="db-input db-pph" value="${pph}" placeholder="-" style="width: 60px;">
         </td>
         <td>
             <button class="btn-icon delete-db-btn" title="Delete Locally" style="color:var(--wm-blue);">
@@ -139,6 +138,7 @@ function createDbRow(assoc) {
     // Store hidden state attached to the TR element object itself
     tr._assocStatus = status;
     tr._assocCompleted = completed;
+    tr._assocType = assoc['Employment Type'] || 'Full-Time';
 
     const roleSelect = tr.querySelector('.db-role');
 
@@ -226,7 +226,7 @@ document.getElementById('deleteSelectedBtn')?.addEventListener('click', () => {
 document.getElementById('saveBatchBtn')?.addEventListener('click', async () => {
     const saveBtn = document.getElementById('saveBatchBtn');
     const originalText = saveBtn.innerHTML;
-
+    
     try {
         saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
         saveBtn.disabled = true;
@@ -235,13 +235,13 @@ document.getElementById('saveBatchBtn')?.addEventListener('click', async () => {
         document.querySelectorAll('.db-row').forEach(tr => {
             allAssociates.push({
                 "Name": tr.querySelector('.db-name').value,
+                "User ID": tr.querySelector('.db-userid').value,
                 "Status": tr._assocStatus,
-                "Employment Type": tr.querySelector('.db-type').value,
+                "Employment Type": tr._assocType || "Full-Time",
                 "Minor Status": tr.querySelector('.db-minor').value,
                 "Exclude": tr.querySelector('.db-exclude').value,
                 "Completed": tr._assocCompleted,
-                "Role": tr.querySelector('.db-role').value,
-                "PPH": tr.querySelector('.db-pph').value
+                "Role": tr.querySelector('.db-role').value
             });
         });
 
@@ -279,6 +279,10 @@ async function syncDatabase() {
 
         if (data.status === 'success') {
             lastSyncTime.textContent = data.last_sync;
+            if (data.sheet_url) {
+                const openSheetBtn = document.getElementById('openSheetBtn');
+                if (openSheetBtn) openSheetBtn.href = data.sheet_url;
+            }
         } else {
             lastSyncTime.textContent = 'Sync Failed';
         }
@@ -310,7 +314,7 @@ pdfUpload.addEventListener('change', async (e) => {
             <tr>
                 <td colspan="5" style="text-align:center; padding: 2rem;">
                     <i class="fa-solid fa-spinner fa-spin fa-2x"></i>
-                    <p>Processing PDF...</p>
+                    <p>Processing Schedule...</p>
                 </td>
             </tr>
         `;
@@ -320,7 +324,10 @@ pdfUpload.addEventListener('change', async (e) => {
             body: formData
         });
 
-        if (!res.ok) throw new Error('Failed to process PDF text extraction');
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Failed to process schedule file');
+        }
 
         const data = await res.json();
 
@@ -330,7 +337,7 @@ pdfUpload.addEventListener('change', async (e) => {
         if (data.mismatches && data.mismatches.length > 0) {
             currentMismatches = data.mismatches;
             mismatchAlert.classList.remove('hidden');
-            mismatchText.textContent = `These names were found in the PDF but not in the database: ${data.mismatches.join(', ')}`;
+            mismatchText.textContent = `These names were found in the schedule but not in the database: ${data.mismatches.join(', ')}`;
         } else {
             mismatchAlert.classList.add('hidden');
             currentMismatches = [];
@@ -342,7 +349,7 @@ pdfUpload.addEventListener('change', async (e) => {
 
         calcLunchesBtn.disabled = main_df.length === 0;
         downloadPdfBtn.disabled = main_df.length === 0;
-
+        
         const clearPdfBtn = document.getElementById('clearPdfBtn');
         if (clearPdfBtn) clearPdfBtn.disabled = main_df.length === 0;
 
@@ -361,17 +368,17 @@ if (clearPdfBtn) {
     clearPdfBtn.addEventListener('click', () => {
         main_df = [];
         calculationDone = false;
-
+        
         // Reset UI metrics
         pickerCount.textContent = '0';
         backroomCount.textContent = '0';
         exceptionCount.textContent = '0';
-
+        
         // Reset Tables
         rosterBody.innerHTML = `
             <tr id="emptyRow">
-                <td colspan="5" style="text-align:center; padding: 2rem;">
-                    Upload a PDF to view roster
+                <td colspan="7" style="text-align:center; padding: 2rem;">
+                    Upload a CSV schedule to view roster
                 </td>
             </tr>
         `;
@@ -383,15 +390,15 @@ if (clearPdfBtn) {
                 </td>
             </tr>
         `;
-
+        
         // Hide mismatches
         mismatchAlert.classList.add('hidden');
-
+        
         // Disable buttons
         calcLunchesBtn.disabled = true;
         downloadPdfBtn.disabled = true;
         clearPdfBtn.disabled = true;
-
+        
         // Reset file input
         pdfUpload.value = '';
     });
@@ -418,7 +425,7 @@ calcLunchesBtn.addEventListener('click', async () => {
             try {
                 const errData = await res.json();
                 errorMsg = errData.detail || errorMsg;
-            } catch (err) { }
+            } catch (err) {}
             throw new Error(errorMsg);
         }
 
@@ -454,7 +461,25 @@ function getLunchOptions() {
     return opts;
 }
 
+function getBreakOptions() {
+    const opts = ['Pending...', 'N/A', 'No Slot Avail'];
+    let start = new Date();
+    start.setHours(0, 0, 0, 0); // Start at midnight
+
+    for (let i = 0; i < 96; i++) {
+        let h = start.getHours();
+        let m = start.getMinutes();
+        let ampm = h >= 12 ? 'PM' : 'AM';
+        let displayH = h % 12 || 12;
+        let displayM = m < 10 ? '0' + m : m;
+        opts.push(`${displayH}:${displayM} ${ampm}`);
+        start.setMinutes(start.getMinutes() + 15);
+    }
+    return opts;
+}
+
 const LUNCH_OPTIONS = getLunchOptions();
+const BREAK_OPTIONS = getBreakOptions();
 
 function renderRoster() {
     if (main_df.length === 0) {
@@ -467,10 +492,11 @@ function renderRoster() {
 
     // Helper to add icons to names like in original
     const getIconName = (name, role) => {
-        let clean = name.replace("🔴 ", "").replace("🔵 ", "").replace("🟡 ", "").replace("💖 ", "").replace("💙 ", "").replace("💛 ", "");
+        let clean = name.replace("🔴 ", "").replace("🔵 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("💖 ", "").replace("💙 ", "").replace("💛 ", "").replace("🧡 ", "");
         if (role === "Pickers" || role === "Picker") return `🔴 ${clean}`;
         if (role === "Backroom") return `🔵 ${clean}`;
         if (role === "Exceptions") return `🟡 ${clean}`;
+        if (role === "IP/GMD" || role === "IPGMD") return `🟠 ${clean}`;
         return clean;
     };
 
@@ -483,33 +509,62 @@ function renderRoster() {
         return new Date(a.StartDt) - new Date(b.StartDt);
     });
 
+    // Calculate role-specific break and lunch counts to detect overlaps
+    const roleBreakCounts = {};
+    const roleLunchCounts = {};
+
+    main_df.forEach(row => {
+        if (!row.Role || row.Role === 'Exclude') return;
+        if (!roleBreakCounts[row.Role]) roleBreakCounts[row.Role] = {};
+        if (!roleLunchCounts[row.Role]) roleLunchCounts[row.Role] = {};
+
+        const b1 = row['Break 1'];
+        if (b1 && b1 !== 'Pending...' && b1 !== 'N/A' && b1 !== 'No Slot Avail') {
+            roleBreakCounts[row.Role][b1] = (roleBreakCounts[row.Role][b1] || 0) + 1;
+        }
+
+        const b2 = row['Break 2'];
+        if (b2 && b2 !== 'Pending...' && b2 !== 'N/A' && b2 !== 'No Slot Avail') {
+            roleBreakCounts[row.Role][b2] = (roleBreakCounts[row.Role][b2] || 0) + 1;
+        }
+
+        const lunch = row['Lunch Time'];
+        if (lunch && lunch !== 'Pending...' && lunch !== 'N/A' && lunch !== 'No Slot Avail') {
+            roleLunchCounts[row.Role][lunch] = (roleLunchCounts[row.Role][lunch] || 0) + 1;
+        }
+    });
+
     main_df.forEach((row, idx) => {
         const tr = document.createElement('tr');
 
         const displayName = getIconName(row.Associate, row.Role);
 
-        let pphText = '';
-        if (window.cachedAssociates) {
-            let cleanName = displayName.replace("🔴 ", "").replace("🔵 ", "").replace("🟡 ", "").replace("(M) ", "").replace(".", "").trim();
-            const match = window.cachedAssociates.find(a => {
-                let dbParts = a.Name.split(' ');
-                let dbFmt = dbParts.length > 1 ? `${dbParts[0]} ${dbParts[1][0]}` : dbParts[0];
-                return dbFmt.toLowerCase() === cleanName.toLowerCase();
-            });
-            if (match && match.PPH && match.PPH !== '-') {
-                pphText = ` <span style="color:#aaa; font-size: 0.8em">(${match.PPH})</span>`;
-            }
-        }
-
         // Role Select
         const roleOptions = ROLES.map(r => `<option value="${r}" ${r === row.Role ? 'selected' : ''}>${r}</option>`).join('');
 
-        // Lunch Select
-        const lunchOptions = LUNCH_OPTIONS.map(l => `<option value="${l}" ${l === row['Lunch Time'] ? 'selected' : ''}>${l}</option>`).join('');
-        const lunchClass = row['Lunch Time'] === 'No Slot Avail' ? 'lunch-select lunch-warning' : 'lunch-select';
+        // Break 1 Select & Overlap Check (Pink)
+        const break1Val = row['Break 1'] || 'Pending...';
+        const break1Options = BREAK_OPTIONS.map(b => `<option value="${b}" ${b === break1Val ? 'selected' : ''}>${b}</option>`).join('');
+        const isB1Overlap = (roleBreakCounts[row.Role] && roleBreakCounts[row.Role][break1Val] > 1);
+        const break1Class = (break1Val === 'No Slot Avail' || isB1Overlap) ? 'lunch-select break-warning' : 'lunch-select';
+        const break1Title = isB1Overlap ? `Break overlap in ${row.Role} (${break1Val})` : '';
+
+        // Lunch Select & Overlap Check (Red)
+        const lunchVal = row['Lunch Time'] || 'Pending...';
+        const lunchOptions = LUNCH_OPTIONS.map(l => `<option value="${l}" ${l === lunchVal ? 'selected' : ''}>${l}</option>`).join('');
+        const isLunchOverlap = (roleLunchCounts[row.Role] && roleLunchCounts[row.Role][lunchVal] > 1);
+        const lunchClass = (lunchVal === 'No Slot Avail' || isLunchOverlap) ? 'lunch-select lunch-warning' : 'lunch-select';
+        const lunchTitle = isLunchOverlap ? `Lunch overlap in ${row.Role} (${lunchVal})` : '';
+
+        // Break 2 Select & Overlap Check (Pink)
+        const break2Val = row['Break 2'] || 'Pending...';
+        const break2Options = BREAK_OPTIONS.map(b => `<option value="${b}" ${b === break2Val ? 'selected' : ''}>${b}</option>`).join('');
+        const isB2Overlap = (roleBreakCounts[row.Role] && roleBreakCounts[row.Role][break2Val] > 1);
+        const break2Class = (break2Val === 'No Slot Avail' || isB2Overlap) ? 'lunch-select break-warning' : 'lunch-select';
+        const break2Title = isB2Overlap ? `Break overlap in ${row.Role} (${break2Val})` : '';
 
         tr.innerHTML = `
-            <td><strong>${displayName}</strong>${pphText}</td>
+            <td><strong>${displayName}</strong></td>
             <td>
                 <select class="role-select" data-idx="${idx}">
                     ${roleOptions}
@@ -517,11 +572,21 @@ function renderRoster() {
             </td>
             <td>
                 <input type="text" class="shift-input" data-idx="${idx}" value="${row.Shift}" placeholder="e.g. 5am - 2pm" 
-                style="width: 100px; padding: 4px; border: 1px solid transparent; background: transparent; font-family: inherit; font-size: inherit; border-radius: 4px;" />
+                style="width: 155px; padding: 4px; border: 1px solid transparent; background: transparent; font-family: inherit; font-size: inherit; border-radius: 4px;" />
             </td>
             <td>
-                <select class="${lunchClass}" data-idx="${idx}" data-field="lunch">
+                <select class="${break1Class}" data-idx="${idx}" data-field="break1" title="${break1Title}">
+                    ${break1Options}
+                </select>
+            </td>
+            <td>
+                <select class="${lunchClass}" data-idx="${idx}" data-field="lunch" title="${lunchTitle}">
                     ${lunchOptions}
+                </select>
+            </td>
+            <td>
+                <select class="${break2Class}" data-idx="${idx}" data-field="break2" title="${break2Title}">
+                    ${break2Options}
                 </select>
             </td>
             <td>
@@ -541,11 +606,13 @@ function renderRoster() {
             main_df[idx].Shift = newShift;
             updateShiftDates(idx, newShift);
 
-            // Reset lunch on shift change
+            // Reset lunch and breaks on shift change
+            main_df[idx]['Break 1'] = 'Pending...';
             main_df[idx]['Lunch Time'] = 'Pending...';
+            main_df[idx]['Break 2'] = 'Pending...';
 
             if (calculationDone) updateCoverageTable();
-            renderRoster(); // re-render to reflect new empty lunch dropdown
+            renderRoster(); // re-render to reflect new empty dropdowns
         });
 
         inp.addEventListener('focus', (e) => {
@@ -570,11 +637,28 @@ function renderRoster() {
         });
     });
 
+    document.querySelectorAll('select[data-field="break1"]').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+            const idx = e.target.getAttribute('data-idx');
+            main_df[idx]['Break 1'] = e.target.value;
+            renderRoster();
+        });
+    });
+
     document.querySelectorAll('select[data-field="lunch"]').forEach(sel => {
         sel.addEventListener('change', (e) => {
             const idx = e.target.getAttribute('data-idx');
             main_df[idx]['Lunch Time'] = e.target.value;
             if (calculationDone) updateCoverageTable();
+            renderRoster();
+        });
+    });
+
+    document.querySelectorAll('select[data-field="break2"]').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+            const idx = e.target.getAttribute('data-idx');
+            main_df[idx]['Break 2'] = e.target.value;
+            renderRoster();
         });
     });
 
@@ -594,16 +678,19 @@ function renderRoster() {
 }
 
 function updateStats() {
-    let pickers = 0, backroom = 0, exceptions = 0;
+    let pickers = 0, backroom = 0, exceptions = 0, ipgmd = 0;
     main_df.forEach(row => {
         if (row.Role === 'Pickers') pickers++;
         if (row.Role === 'Backroom') backroom++;
         if (row.Role === 'Exceptions') exceptions++;
+        if (row.Role === 'IP/GMD' || row.Role === 'IPGMD') ipgmd++;
     });
 
     pickerCount.textContent = pickers;
     backroomCount.textContent = backroom;
     exceptionCount.textContent = exceptions;
+    const ipgmdCountEl = document.getElementById('ipgmdCount');
+    if (ipgmdCountEl) ipgmdCountEl.textContent = ipgmd;
 }
 
 // Download PDF
@@ -625,22 +712,31 @@ downloadPdfBtn.addEventListener('click', () => {
     const tableData = [];
     main_df.forEach(row => {
         // Strip emojis and minor tags for clean PDF
-        let cleanName = row.Associate.replace(/[🔴🔵🟡💖💙💛]/g, "").replace(/\(M\)/g, "").trim();
-        tableData.push([cleanName, row.Role, row.Shift, row['Lunch Time']]);
+        let cleanName = row.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡]/g, "").replace(/\(M\)/g, "").trim();
+        tableData.push([
+            cleanName, 
+            row.Role, 
+            row.Shift, 
+            row['Break 1'] || 'N/A', 
+            row['Lunch Time'] || 'N/A', 
+            row['Break 2'] || 'N/A'
+        ]);
     });
 
     doc.autoTable({
         startY: 30,
-        head: [['Associate', 'Role', 'Shift', 'Lunch Time']],
+        head: [['Associate', 'Role', 'Shift', 'Break 1', 'Lunch Time', 'Break 2']],
         body: tableData,
         theme: 'striped',
         headStyles: { fillColor: [0, 113, 206] }, // Walmart Blue
-        styles: { font: 'helvetica', fontSize: 10 },
+        styles: { font: 'helvetica', fontSize: 8.5 },
         columnStyles: {
-            0: { cellWidth: 50 },
-            1: { cellWidth: 40 },
-            2: { cellWidth: 40 },
-            3: { cellWidth: 40 }
+            0: { cellWidth: 46 },
+            1: { cellWidth: 28 },
+            2: { cellWidth: 34 },
+            3: { cellWidth: 26 },
+            4: { cellWidth: 26 },
+            5: { cellWidth: 26 }
         }
     });
 
@@ -656,25 +752,15 @@ downloadPdfBtn.addEventListener('click', () => {
         rows.forEach(row => {
             if (!row.classList.contains('empty-state')) {
                 const cells = row.querySelectorAll('td');
-                if (cells.length === 4) {
-                    coverageData.push([
-                        cells[0].innerText.replace(/\n/g, " "),
-                        cells[1].innerText.replace(/\n/g, " "),
-                        cells[2].innerText.replace(/\n/g, " "),
-                        cells[3].innerText.replace(/\n/g, " ")
-                    ]);
+                if (cells.length > 0) {
+                    coverageData.push(Array.from(cells).map(c => c.innerText.replace(/\n/g, " ")));
                 }
             }
         });
 
         if (coverageData.length > 0) {
             const headCells = document.querySelectorAll('#coverageTable thead th');
-            const headRow = [[
-                headCells[0].innerText,
-                headCells[1].innerText,
-                headCells[2].innerText,
-                headCells[3].innerText
-            ]];
+            const headRow = [Array.from(headCells).map(th => th.innerText)];
 
             doc.autoTable({
                 startY: finalY + 5,
@@ -768,10 +854,10 @@ function updateCoverageTable() {
         let lblAmpm = h < 12 ? 'AM' : 'PM';
         let lbl = h === 12 ? "12 PM" : `${lblH} ${lblAmpm} `;
 
-        let pCount = 0, bCount = 0, eCount = 0;
-        let totalPPH = 0;
+        let pCount = 0, bCount = 0, eCount = 0, ipCount = 0;
 
         main_df.forEach(r => {
+            if (r.Role === 'Exclude') return;
             if (!r.StartDt) return;
             let sd = new Date(r.StartDt);
             let ed = new Date(r.EndDt);
@@ -798,40 +884,25 @@ function updateCoverageTable() {
                 if (!on_l) {
                     let act = r.Role;
                     if (h === 4) {
-                        if (r.Role === "Backroom" || r.Role === "Exceptions") act = "Pickers";
+                        if (r.Role === "Backroom" || r.Role === "Exceptions" || r.Role === "IP/GMD" || r.Role === "IPGMD") act = "Pickers";
                     } else if (h === 5) {
                         if (r.Role === "Backroom" && bCount >= 2) act = "Pickers";
                     }
-                    if (act === "Pickers") {
-                        pCount++;
-                        let pphValue = 75; // Default if not found
-                        if (window.cachedAssociates) {
-                            let cleanName = r.Associate.replace("🔴 ", "").replace("🔵 ", "").replace("🟡 ", "").replace("(M) ", "").replace(".", "").trim();
-                            const match = window.cachedAssociates.find(a => {
-                                let dbParts = a.Name.split(' ');
-                                let dbFmt = dbParts.length > 1 ? `${dbParts[0]} ${dbParts[1][0]}` : dbParts[0];
-                                return dbFmt.toLowerCase() === cleanName.toLowerCase();
-                            });
-                            if (match && match.PPH && match.PPH !== '-') {
-                                pphValue = parseInt(match.PPH, 10) || 75;
-                            }
-                        }
-                        totalPPH += pphValue;
-                    }
+                    if (act === "Pickers") pCount++;
                     if (act === "Backroom") bCount++;
                     if (act === "Exceptions") eCount++;
+                    if (act === "IP/GMD" || act === "IPGMD") ipCount++;
                 }
             }
         });
 
-        let avgPPH = pCount > 0 ? Math.round(totalPPH / pCount) : 0;
-
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td><strong>${lbl}</strong></td>
-            <td>${pCount} <span style="color:#aaa; font-size: 0.8em">(${pCount * 75} / ${totalPPH})</span> <span style="color:#888; font-size: 0.75em; margin-left: 5px;">Avg PPH: ${avgPPH}</span></td>
+            <td>${pCount} <span style="color:#aaa; font-size: 0.8em">(${pCount * 70})</span></td>
             <td>${bCount} <span style="color:#aaa; font-size: 0.8em">(${bCount * 5})</span></td>
             <td>${eCount}</td>
+            <td>${ipCount}</td>
         `;
         coverageBody.appendChild(tr);
     }
@@ -853,16 +924,16 @@ if (openManualAddBtn && manualAddModal) {
     openManualAddBtn.addEventListener('click', async () => {
         manualAddModal.classList.remove('hidden');
         manualAddSelect.innerHTML = '<option value="">Loading...</option>';
-
+        
         try {
             const res = await fetch(`${API_BASE}/associates`);
             if (res.ok) {
                 const data = await res.json();
                 const associates = data.associates;
-
+                
                 // Filter out excluded ones
                 const active = associates.filter(a => a.Exclude?.toLowerCase() !== 'yes' && a.Name?.trim() !== '');
-
+                
                 manualAddSelect.innerHTML = '<option value="">Select Associate...</option>';
                 active.forEach(a => {
                     const opt = document.createElement('option');
@@ -885,39 +956,39 @@ if (openManualAddBtn && manualAddModal) {
         const selectedVal = manualAddSelect.value;
         const startVal = document.getElementById('manualAddStart').value;
         const endVal = document.getElementById('manualAddEnd').value;
-
+        
         if (!selectedVal || !startVal || !endVal) {
             alert("Please fill all fields");
             return;
         }
-
+        
         const assoc = JSON.parse(selectedVal);
-
+        
         // Parse time
         const today = new Date();
         const startSplit = startVal.split(':');
         const endSplit = endVal.split(':');
-
+        
         let startDt = new Date(today.getFullYear(), today.getMonth(), today.getDate(), parseInt(startSplit[0]), parseInt(startSplit[1]));
         let endDt = new Date(today.getFullYear(), today.getMonth(), today.getDate(), parseInt(endSplit[0]), parseInt(endSplit[1]));
-
+        
         if (endDt < startDt) {
             endDt.setDate(endDt.getDate() + 1);
         }
-
+        
         const durationHours = (endDt - startDt) / (1000 * 60 * 60);
-
+        
         // Format shift string
         const formatTime = (d) => {
             let h = d.getHours();
             let m = d.getMinutes();
             const ampm = h >= 12 ? 'pm' : 'am';
             h = h % 12 || 12;
-            const mStr = m < 10 ? '0' + m : m;
+            const mStr = m < 10 ? '0'+m : m;
             return `${h}:${mStr}${ampm}`;
         };
         const shiftStr = `${formatTime(startDt)} - ${formatTime(endDt)}`;
-
+        
         // Format Name
         let parts = assoc.Name.split(' ');
         let fmtName = parts.length > 1 ? `${parts[0]} ${parts[1][0]}` : parts[0];
@@ -925,50 +996,92 @@ if (openManualAddBtn && manualAddModal) {
         fmtName = fmtName.replace(/\b\w/g, l => l.toUpperCase());
         const isMinor = assoc['Minor Status']?.toLowerCase() === 'yes';
         const matchName = isMinor ? `(M) ${fmtName}` : fmtName;
-
+        
         // Role determination
         let assignedRole = "Pickers";
         const sheetRole = assoc.Role?.toLowerCase() || "";
         if (sheetRole.includes("picker")) assignedRole = "Pickers";
         else if (sheetRole.includes("backroom") || sheetRole.includes("dispense")) assignedRole = "Backroom";
         else if (sheetRole.includes("exception")) assignedRole = "Exceptions";
-
+        
         const pad = (n) => n < 10 ? '0' + n : n;
         const localIsoString = (d) => {
             return d.getFullYear() + '-' +
-                pad(d.getMonth() + 1) + '-' +
-                pad(d.getDate()) + 'T' +
-                pad(d.getHours()) + ':' +
-                pad(d.getMinutes()) + ':' +
-                pad(d.getSeconds());
+                   pad(d.getMonth() + 1) + '-' +
+                   pad(d.getDate()) + 'T' +
+                   pad(d.getHours()) + ':' +
+                   pad(d.getMinutes()) + ':' +
+                   pad(d.getSeconds());
         };
-
+        
         const newRow = {
             Associate: matchName,
             Role: assignedRole,
             Shift: shiftStr,
+            "Break 1": "Pending...",
             "Lunch Time": "Pending...",
+            "Break 2": "Pending...",
             StartDt: localIsoString(startDt),
             EndDt: localIsoString(endDt),
             Duration: durationHours
         };
-
+        
         // Ensure main_df exists and append
         if (typeof main_df === 'undefined' || !main_df) main_df = [];
         main_df.push(newRow);
-
+        
         // Update UI
         calculationDone = false;
         renderRoster();
         updateStats();
-
+        
         const calcLunchesBtn = document.getElementById('calcLunchesBtn');
         const downloadPdfBtn = document.getElementById('downloadPdfBtn');
         const clearPdfBtn = document.getElementById('clearPdfBtn');
         if (calcLunchesBtn) calcLunchesBtn.disabled = main_df.length === 0;
         if (downloadPdfBtn) downloadPdfBtn.disabled = main_df.length === 0;
         if (clearPdfBtn) clearPdfBtn.disabled = main_df.length === 0;
-
+        
         manualAddModal.classList.add('hidden');
     });
+}
+
+// Database Search Filter
+const dbSearchInput = document.getElementById('dbSearchInput');
+function filterDatabaseTable() {
+    if (!dbSearchInput) return;
+    const query = dbSearchInput.value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.db-row');
+    let visibleCount = 0;
+
+    rows.forEach(tr => {
+        const name = tr.querySelector('.db-name')?.value.toLowerCase() || '';
+        const userId = tr.querySelector('.db-userid')?.value.toLowerCase() || '';
+        if (name.includes(query) || userId.includes(query)) {
+            tr.style.display = '';
+            visibleCount++;
+        } else {
+            tr.style.display = 'none';
+        }
+    });
+
+    let noMatchRow = document.getElementById('dbNoMatchRow');
+    if (visibleCount === 0 && rows.length > 0 && query !== '') {
+        if (!noMatchRow) {
+            noMatchRow = document.createElement('tr');
+            noMatchRow.id = 'dbNoMatchRow';
+            noMatchRow.innerHTML = `<td colspan="7" style="text-align:center; padding: 2rem; color: #666;"><i class="fa-solid fa-user-slash fa-lg"></i> <span style="margin-left: 8px;">No associates found matching "${dbSearchInput.value}"</span></td>`;
+            dbBody.appendChild(noMatchRow);
+        } else {
+            noMatchRow.style.display = '';
+            const msgSpan = noMatchRow.querySelector('span');
+            if (msgSpan) msgSpan.textContent = `No associates found matching "${dbSearchInput.value}"`;
+        }
+    } else if (noMatchRow) {
+        noMatchRow.style.display = 'none';
+    }
+}
+
+if (dbSearchInput) {
+    dbSearchInput.addEventListener('input', filterDatabaseTable);
 }

@@ -34,34 +34,38 @@
             <div class="actions card">
                 <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Actions</h3>
                 <label for="pdfUpload" class="btn btn-primary btn-block">
-                    <i class="fa-solid fa-file-pdf"></i> Upload Roster PDF
+                    <i class="fa-solid fa-file-csv"></i> Upload Schedule (CSV)
                 </label>
-                <input type="file" id="pdfUpload" accept=".pdf" style="display: none;">
+                <input type="file" id="pdfUpload" accept=".csv" style="display: none;">
 
                 <button id="calcLunchesBtn" class="btn btn-secondary btn-block mt-2" disabled>
-                    <i class="fa-solid fa-utensils"></i> Generate Lunches
+                    <i class="fa-solid fa-utensils"></i> Generate Lunches & Breaks
                 </button>
                 <button id="downloadPdfBtn" class="btn btn-outline btn-block mt-2" disabled>
                     <i class="fa-solid fa-file-pdf"></i> Download PDF
                 </button>
                 <button id="clearPdfBtn" class="btn btn-outline btn-block mt-2" disabled style="color: #ef4444; border-color: #ef4444;">
-                    <i class="fa-solid fa-trash-can"></i> Clear PDF
+                    <i class="fa-solid fa-trash-can"></i> Clear Schedule
                 </button>
             </div>
 
             <div class="stats card">
                 <h3><i class="fa-solid fa-chart-pie"></i> Today's Coverage</h3>
                 <div class="stat-row">
-                    <span><i class="fa-solid fa-cart-shopping"></i> Pickers</span>
+                    <span><i class="fa-solid fa-cart-shopping" style="color: #c62828;"></i> Pickers</span>
                     <span id="pickerCount" class="badge badge-Picker">0</span>
                 </div>
                 <div class="stat-row">
-                    <span><i class="fa-solid fa-box"></i> Backroom</span>
+                    <span><i class="fa-solid fa-box" style="color: #1565c0;"></i> Backroom</span>
                     <span id="backroomCount" class="badge badge-Backroom">0</span>
                 </div>
                 <div class="stat-row">
-                    <span><i class="fa-solid fa-triangle-exclamation"></i> Exceptions</span>
+                    <span><i class="fa-solid fa-triangle-exclamation" style="color: #f57f17;"></i> Exceptions</span>
                     <span id="exceptionCount" class="badge badge-Exceptions">0</span>
+                </div>
+                <div class="stat-row">
+                    <span><i class="fa-solid fa-truck-fast" style="color: #e65100;"></i> IP/GMD</span>
+                    <span id="ipgmdCount" class="badge badge-IPGMD">0</span>
                 </div>
             </div>
         </aside>
@@ -116,17 +120,19 @@
                                     <th>Associate</th>
                                     <th>Role</th>
                                     <th>Shift</th>
+                                    <th>Break 1</th>
                                     <th>Lunch Time</th>
+                                    <th>Break 2</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="rosterBody">
                                 <tr class="empty-state" id="emptyRow">
-                                    <td colspan="5">
+                                    <td colspan="7">
                                         <div class="empty-content">
-                                            <i class="fa-duotone fa-file-pdf fa-3x"
-                                                style="font-size: 3rem; margin-bottom: 1rem;"></i>
-                                            <p>Upload a PDF schedule to generate the roster</p>
+                                            <i class="fa-solid fa-file-csv fa-3x"
+                                                style="font-size: 3rem; margin-bottom: 1rem; color: #0284c7;"></i>
+                                            <p>Upload a CSV schedule to generate the roster</p>
                                         </div>
                                     </td>
                                 </tr>
@@ -147,9 +153,10 @@
                             <thead>
                                 <tr>
                                     <th>Hour</th>
-                                    <th>Pickers (Rate: 75)</th>
+                                    <th>Pickers (Rate: 70)</th>
                                     <th>Backroom (Rate: 5)</th>
                                     <th>Exceptions</th>
+                                    <th>IP/GMD</th>
                                 </tr>
                             </thead>
                             <tbody id="coverageBody">
@@ -166,9 +173,14 @@
             <div id="databaseView" class="view-section hidden">
                 <div class="roster-container glass-panel" style="height: 100%;">
                     <div class="table-header"
-                        style="display: flex; justify-content: space-between; align-items: center;">
+                        style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
                         <h2><i class="fa-solid fa-users"></i> Synced Google Sheet Database</h2>
-                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                            <div class="search-box" style="position: relative;">
+                                <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #888;"></i>
+                                <input type="text" id="dbSearchInput" placeholder="Search by name or User ID..." 
+                                    style="padding: 0.4rem 0.8rem 0.4rem 2.2rem; border-radius: 6px; border: 1px solid var(--border-color, #ccc); font-size: 0.85rem; width: 220px; outline: none; background: var(--bg-card, #fff);">
+                            </div>
                             <button id="saveBatchBtn" class="btn btn-primary"
                                 style="font-size: 0.85rem; padding: 0.4rem 0.8rem; background-color: #10b981; border-color: #10b981;">
                                 <i class="fa-solid fa-floppy-disk"></i> Save Changes
@@ -181,7 +193,7 @@
                                 style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
                                 <i class="fa-solid fa-plus"></i> Add Associate
                             </button>
-                            <a href="https://docs.google.com/spreadsheets/d/1C-b4TtOa_8XywfnVCchv03610wkeYj6dsxbx_ZOG50I/edit"
+                            <a id="openSheetBtn" href="https://docs.google.com/spreadsheets/d/1IwnNimOKM_COtfict4eHbeWjgsRXXN-e2m-DGn-ywH4/edit"
                                 target="_blank" class="btn btn-outline"
                                 style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
                                 <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Google Sheet
@@ -194,17 +206,16 @@
                                 <tr>
                                     <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllCheckbox"></th>
                                     <th>Name</th>
-                                    <th>Employment Type</th>
+                                    <th>User ID</th>
                                     <th>Minor</th>
                                     <th>Exclude</th>
                                     <th>Role</th>
-                                    <th>PPH</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="dbBody">
                                 <tr class="empty-state">
-                                    <td colspan="8">
+                                    <td colspan="7">
                                         <div class="empty-content">
                                             <i class="fa-solid fa-spinner fa-spin fa-2x"></i>
                                             <p>Loading database...</p>
