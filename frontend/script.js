@@ -107,7 +107,7 @@ function createDbRow(assoc) {
     tr.innerHTML = `
         <td style="text-align: center;"><input type="checkbox" class="row-select"></td>
         <td><input type="text" class="db-input db-name" value="${assoc.Name || ''}" placeholder="Name"></td>
-        <td><input type="text" class="db-input db-userid" value="${assoc['User ID'] || assoc.UserID || ''}" placeholder="User ID" style="width: 90px;"></td>
+        <td><input type="text" class="db-input db-userid" value="${assoc['User ID'] || assoc.UserID || assoc.user_id || ''}" placeholder="User ID" style="width: 90px;"></td>
         <td>
             <select class="db-input db-minor">
                 <option value="No" ${(assoc['Minor Status'] || 'No').toLowerCase() === 'no' ? 'selected' : ''}>No</option>
@@ -169,14 +169,20 @@ if (quickAddBtn) {
         const emptyState = document.querySelector('.empty-state');
         if (emptyState) emptyState.remove();
 
-        currentMismatches.forEach(name => {
-            // Capitalize format appropriately like parser did
-            let parts = name.split(' ');
-            let fmtName = parts.length > 1 ? `${parts[0]} ${parts[1][0]}` : parts[0];
-            // To ensure capitalization
-            fmtName = fmtName.replace(/\b\w/g, l => l.toUpperCase());
+        currentMismatches.forEach(item => {
+            const rawName = typeof item === 'object' && item !== null ? (item.name || '') : String(item || '');
+            const userId = typeof item === 'object' && item !== null ? (item.user_id || item['User ID'] || '') : '';
+            const role = typeof item === 'object' && item !== null ? (item.role || item.Role || '') : '';
 
-            const newRow = createDbRow({ row_index: 'new', Name: fmtName });
+            // Keep full first and last name with clean capitalization
+            let fmtName = rawName.trim().replace(/\b\w/g, l => l.toUpperCase());
+
+            const newRow = createDbRow({
+                row_index: 'new',
+                Name: fmtName,
+                'User ID': userId,
+                Role: role
+            });
             dbBody.prepend(newRow);
         });
 
@@ -337,7 +343,13 @@ pdfUpload.addEventListener('change', async (e) => {
         if (data.mismatches && data.mismatches.length > 0) {
             currentMismatches = data.mismatches;
             mismatchAlert.classList.remove('hidden');
-            mismatchText.textContent = `These names were found in the schedule but not in the database: ${data.mismatches.join(', ')}`;
+            const displayNames = data.mismatches.map(m => {
+                if (typeof m === 'object' && m !== null) {
+                    return m.user_id ? `${m.name} (${m.user_id})` : m.name;
+                }
+                return m;
+            });
+            mismatchText.textContent = `These names were found in the schedule but not in the database: ${displayNames.join(', ')}`;
         } else {
             mismatchAlert.classList.add('hidden');
             currentMismatches = [];
@@ -990,10 +1002,7 @@ if (openManualAddBtn && manualAddModal) {
         const shiftStr = `${formatTime(startDt)} - ${formatTime(endDt)}`;
         
         // Format Name
-        let parts = assoc.Name.split(' ');
-        let fmtName = parts.length > 1 ? `${parts[0]} ${parts[1][0]}` : parts[0];
-        // Capitalize
-        fmtName = fmtName.replace(/\b\w/g, l => l.toUpperCase());
+        let fmtName = (assoc.Name || '').trim().replace(/\b\w/g, l => l.toUpperCase());
         const isMinor = assoc['Minor Status']?.toLowerCase() === 'yes';
         const matchName = isMinor ? `(M) ${fmtName}` : fmtName;
         

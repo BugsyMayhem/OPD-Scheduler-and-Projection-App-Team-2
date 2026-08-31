@@ -248,6 +248,10 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
         if is_excluded:
             continue
 
+        user_id_val = str(row.get(user_id_col, '')).strip() if user_id_col else ""
+        if user_id_val and user_id_val.lower() in ("nan", "none", "-", ""):
+            user_id_val = ""
+
         if match_entry:
             best_name = raw_name if (len(raw_name) > len(match_entry["raw"]) and len(raw_name.split()) >= len(match_entry["raw"].split())) else match_entry["raw"]
             disp_name = format_display_name(best_name, match_entry["is_minor"])
@@ -265,10 +269,13 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
                 assigned_role = "IP/GMD"
             else:
                 assigned_role = "Pickers"
-            mismatches.append(raw_name)
+            mismatches.append({
+                "name": disp_name,
+                "user_id": user_id_val,
+                "role": assigned_role
+            })
 
-        user_id_val = str(row.get(user_id_col, '')).strip() if user_id_col else ""
-        if user_id_val and user_id_val.lower() not in ("nan", "none", "-", ""):
+        if user_id_val:
             disp_name = f"{disp_name} ({user_id_val})"
 
         data.append({
@@ -283,7 +290,15 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
             "Duration": parsed_shift["duration"]
         })
 
-    return data, list(set(mismatches))
+    seen_mismatches = set()
+    unique_mismatches = []
+    for m in mismatches:
+        key = (m["name"], m.get("user_id", ""))
+        if key not in seen_mismatches:
+            seen_mismatches.add(key)
+            unique_mismatches.append(m)
+
+    return data, unique_mismatches
 
 def process_pdf(pdf_bytes, df_associates):
     v_list, excluded_normalized = build_associates_lookup(df_associates)
@@ -318,7 +333,11 @@ def process_pdf(pdf_bytes, df_associates):
                     else:
                         if len(pot) > 1:
                             disp_name = format_display_name(pot, is_minor=False)
-                            mismatches.append(pot)
+                            mismatches.append({
+                                "name": disp_name,
+                                "user_id": "",
+                                "role": "Pickers"
+                            })
                         else:
                             continue
                         assigned_role = "Pickers"
@@ -334,45 +353,68 @@ def process_pdf(pdf_bytes, df_associates):
                         "EndDt": real_end.isoformat(), 
                         "Duration": duration
                     })
-    return data, list(set(mismatches))
 
-def assign_staggered_15min_break(target_dt, taken_counter, max_limit_dt=None, min_limit_dt=None):
-    """
-    Staggers 15-minute breaks (:00, :15, :30, :45) around target_dt.
-    Tries not to overlap; if overlapping is unavoidable, starts from top of the hour and repeats.
-    """
-    base_hour = target_dt.replace(minute=0, second=0, microsecond=0)
-    slots = [
-        base_hour,
-        base_hour + timedelta(minutes=15),
-        base_hour + timedelta(minutes=30),
-        base_hour + timedelta(minutes=45)
-    ]
-    
-    valid_slots = []
-    for s in slots:
-        if min_limit_dt and s < min_limit_dt:
-            continue
-        if max_limit_dt and s > max_limit_dt:
-            continue
-        valid_slots.append(s)
-        
-    if not valid_slots:
-        valid_slots = slots
+    seen_mismatches = set()
+    unique_mismatches = []
+    for m in mismatches:
+        key = (m["name"], m.get("user_id", ""))
+        if key not in seen_mismatches:
+            seen_mismatches.add(key)
+            unique_mismatches.append(m)
 
-    # Pick the slot with the lowest count in taken_counter (ties pick earlier slot: :00, :15, :30, :45)
-    chosen_slot = min(valid_slots, key=lambda s: taken_counter.get(s, 0))
-    taken_counter[chosen_slot] = taken_counter.get(chosen_slot, 0) + 1
-    return chosen_slot.strftime("%I:%M %p").lstrip("0")
+    return data, unique_mismatches
+
+def find_best_slot(target_dt, min_dt, max_dt, slot_counter, step_minutes=15):
+    """
+    Finds the optimal time slot between min_dt and max_dt in step_minutes increments.
+    Prioritizes slots with the lowest occupancy count (0 first, then 1, etc.),
+    and breaks ties by closeness to the ideal target_dt.
+    """
+    if min_dt > max_dt:
+        return None
+
+    # Align min_dt up to the nearest step_minutes boundary
+    curr = min_dt.replace(second=0, microsecond=0)
+    rem = curr.minute % step_minutes
+    if rem != 0:
+        curr += timedelta(minutes=(step_minutes - rem))
+
+    candidate_slots = []
+    while curr <= max_dt:
+        candidate_slots.append(curr)
+        curr += timedelta(minutes=step_minutes)
+
+    if not candidate_slots:
+        return None
+
+    def score_slot(s):
+        occupancy = slot_counter.get(s, 0)
+        dist_seconds = abs((s - target_dt).total_seconds())
+        # Slight bias towards being at or after target_dt rather than too early
+        bias = 0 if s >= target_dt else 1
+        return (occupancy, dist_seconds, bias, s)
+
+    best_slot = min(candidate_slots, key=score_slot)
+    slot_counter[best_slot] = slot_counter.get(best_slot, 0) + 1
+    return best_slot
 
 def calculate_staggered_lunches(roster_data):
-    if not roster_data: return roster_data
+    """
+    Calculates staggered 15-minute breaks and 30-minute lunches with:
+    1. Unified break tracking per role (Break 1 & Break 2 share slot counts).
+    2. Dynamic slot search across allowable windows to minimize concurrent breaks.
+    3. Guaranteed chronological ordering: Start -> Break 1 -> Lunch -> Break 2 -> End.
+    4. Minimum buffer spacing between breaks and lunches.
+    """
+    if not roster_data:
+        return roster_data
+
     df = pd.DataFrame(roster_data)
     df['StartDt'] = pd.to_datetime(df['StartDt'], format='mixed', utc=True).dt.tz_localize(None)
     df['EndDt'] = pd.to_datetime(df['EndDt'], format='mixed', utc=True).dt.tz_localize(None)
     final_records = []
     active_roles = ["Pickers", "Picker", "Backroom", "Exceptions", "IP/GMD", "IPGMD"]
-    
+
     # Process excluded first to maintain them
     if "Exclude" in df['Role'].values:
         ex_group = df[df['Role'] == "Exclude"].to_dict('records')
@@ -380,92 +422,117 @@ def calculate_staggered_lunches(roster_data):
             item['Break 1'] = "N/A"
             item['Lunch Time'] = "N/A"
             item['Break 2'] = "N/A"
-            item['StartDt'] = item['StartDt'].isoformat()
-            item['EndDt'] = item['EndDt'].isoformat()
+            item['StartDt'] = item['StartDt'].isoformat() if hasattr(item['StartDt'], 'isoformat') else str(item['StartDt'])
+            item['EndDt'] = item['EndDt'].isoformat() if hasattr(item['EndDt'], 'isoformat') else str(item['EndDt'])
             final_records.append(item)
-        
+
     for role in active_roles:
         if role not in df['Role'].values:
             continue
-            
-        role_df = df[df['Role'] == role]
-            
-        role_group = role_df.sort_values(by='StartDt').copy()
-        taken_lunch_slots = []
-        break1_counter = {}
-        break2_counter = {}
 
-        for _, row in role_group.iterrows():
+        role_df = df[df['Role'] == role].copy()
+        # Sort by start time, then duration descending to prioritize full shifts
+        role_df = role_df.sort_values(by=['StartDt', 'Duration'], ascending=[True, False])
+
+        # Unified counters per role
+        role_break_counter = {}
+        role_lunch_counter = {}
+
+        assigned_items = []
+        for _, row in role_df.iterrows():
+            row_dict = row.to_dict()
+            st = row['StartDt']
+            en = row['EndDt']
+
             try:
                 duration_val = float(row.get('Duration', 0))
             except (ValueError, TypeError):
-                duration_val = 0
-                
-            has_valid_times = not pd.isna(row['StartDt']) and not pd.isna(row['EndDt'])
+                duration_val = (en - st).total_seconds() / 3600 if pd.notna(st) and pd.notna(en) else 0
 
-            # --- 1. FIRST BREAK (Everyone gets Break 1 starting 2 hours from start) ---
+            has_valid_times = pd.notna(st) and pd.notna(en) and duration_val > 0
+
             if not has_valid_times:
-                row['Break 1'] = "N/A"
-            else:
-                target_b1 = row['StartDt'] + timedelta(hours=2)
-                max_b1 = row['EndDt'] - timedelta(minutes=30)
-                row['Break 1'] = assign_staggered_15min_break(target_b1, break1_counter, max_limit_dt=max_b1)
+                row_dict['Break 1'] = "N/A"
+                row_dict['Lunch Time'] = "N/A"
+                row_dict['Break 2'] = "N/A"
+                assigned_items.append(row_dict)
+                continue
 
-            # --- 2. LUNCH TIME (Shifts >= 6 hours) ---
-            if not has_valid_times or duration_val < 6:
-                row['Lunch Time'] = "N/A"
-            else:
-                is_10_hour = duration_val >= 10
-                shift_offset = 5 if is_10_hour else 4
-                early_offset = shift_offset - 1
-                late_offset = shift_offset + 1
-                
-                target = row['StartDt'] + timedelta(hours=shift_offset)
-                early = row['StartDt'] + timedelta(hours=early_offset)
-                late = row['StartDt'] + timedelta(hours=late_offset)
-                latest_start_allowed = row['EndDt'] - timedelta(hours=3)
-                safe_limit = min(late, latest_start_allowed)
-                curr, found = target, False
-                
-                while curr <= safe_limit:
-                    if not any(abs((curr - t).total_seconds()) < 1800 for t in taken_lunch_slots):
-                        found = True; break
-                    curr += timedelta(minutes=30)
-                    
-                if not found:
-                    curr = target - timedelta(minutes=30)
-                    while curr >= early:
-                        if curr <= latest_start_allowed:
-                            if not any(abs((curr - t).total_seconds()) < 1800 for t in taken_lunch_slots):
-                                found = True; break
-                        curr -= timedelta(minutes=30)
-                        
-                if found:
-                    row['Lunch Time'] = curr.strftime("%I:%M %p").lstrip("0")
-                    taken_lunch_slots.append(curr)
-                else:
-                    row['Lunch Time'] = "No Slot Avail"
+            needs_lunch = duration_val >= 6.0
+            needs_b2 = duration_val >= 7.0
 
-            # --- 3. SECOND BREAK (Only people working 7 hours or more, 2 hours after lunch) ---
-            if not has_valid_times or duration_val < 7:
-                row['Break 2'] = "N/A"
-            else:
-                lunch_str = str(row.get('Lunch Time', '')).strip()
-                lunch_time_obj = parse_time(lunch_str) if lunch_str not in ("N/A", "Pending...", "No Slot Avail", "") else None
-                if lunch_time_obj:
-                    lunch_dt = row['StartDt'].replace(hour=lunch_time_obj.hour, minute=lunch_time_obj.minute, second=0, microsecond=0)
-                    if lunch_dt < row['StartDt']:
-                        lunch_dt += timedelta(days=1)
-                    target_b2 = lunch_dt + timedelta(hours=2)
+            # --- 1. LUNCH TIME (Shifts >= 6 hours) ---
+            lunch_dt = None
+            if needs_lunch:
+                is_10h = duration_val >= 10.0
+                ideal_lunch_offset = 5.0 if is_10h else 4.0
+                target_lunch = st + timedelta(hours=ideal_lunch_offset)
+
+                min_lunch = st + timedelta(hours=3.0)
+                max_lunch = min(st + timedelta(hours=5.5), en - timedelta(hours=2.5))
+                if max_lunch < min_lunch:
+                    max_lunch = en - timedelta(hours=2.0)
+                if max_lunch < min_lunch:
+                    min_lunch = st + timedelta(hours=2.0)
+
+                lunch_dt = find_best_slot(target_lunch, min_lunch, max_lunch, role_lunch_counter, step_minutes=30)
+                if lunch_dt:
+                    row_dict['Lunch Time'] = lunch_dt.strftime("%I:%M %p").lstrip("0")
                 else:
-                    target_b2 = row['StartDt'] + timedelta(hours=6)
-                    
-                max_b2 = row['EndDt'] - timedelta(minutes=30)
-                row['Break 2'] = assign_staggered_15min_break(target_b2, break2_counter, max_limit_dt=max_b2)
-                
-            row_dict = row.to_dict()
+                    row_dict['Lunch Time'] = "No Slot Avail"
+            else:
+                row_dict['Lunch Time'] = "N/A"
+
+            # --- 2. BREAK 1 (Target ~2 hours into shift) ---
+            target_b1 = st + timedelta(hours=2.0)
+            min_b1 = st + timedelta(minutes=75)
+
+            if lunch_dt:
+                max_b1 = lunch_dt - timedelta(minutes=75)
+            else:
+                max_b1 = en - timedelta(minutes=45)
+
+            if max_b1 < min_b1:
+                min_b1 = st + timedelta(minutes=45)
+                max_b1 = (lunch_dt - timedelta(minutes=30)) if lunch_dt else (en - timedelta(minutes=30))
+
+            b1_dt = find_best_slot(target_b1, min_b1, max_b1, role_break_counter, step_minutes=15)
+            if b1_dt:
+                row_dict['Break 1'] = b1_dt.strftime("%I:%M %p").lstrip("0")
+            else:
+                row_dict['Break 1'] = "No Slot Avail"
+
+            # --- 3. BREAK 2 (Shifts >= 7 hours, Target ~2 hours after lunch) ---
+            if needs_b2 and lunch_dt:
+                target_b2 = lunch_dt + timedelta(hours=2.0)
+                min_b2 = lunch_dt + timedelta(minutes=75)
+                max_b2 = en - timedelta(minutes=30)
+
+                if max_b2 < min_b2:
+                    min_b2 = lunch_dt + timedelta(minutes=45)
+                    max_b2 = en - timedelta(minutes=15)
+
+                b2_dt = find_best_slot(target_b2, min_b2, max_b2, role_break_counter, step_minutes=15)
+                if b2_dt:
+                    row_dict['Break 2'] = b2_dt.strftime("%I:%M %p").lstrip("0")
+                else:
+                    row_dict['Break 2'] = "No Slot Avail"
+            elif needs_b2 and not lunch_dt:
+                target_b2 = st + timedelta(hours=5.5)
+                min_b2 = (b1_dt + timedelta(hours=2)) if b1_dt else (st + timedelta(hours=4))
+                max_b2 = en - timedelta(minutes=30)
+                b2_dt = find_best_slot(target_b2, min_b2, max_b2, role_break_counter, step_minutes=15)
+                if b2_dt:
+                    row_dict['Break 2'] = b2_dt.strftime("%I:%M %p").lstrip("0")
+                else:
+                    row_dict['Break 2'] = "No Slot Avail"
+            else:
+                row_dict['Break 2'] = "N/A"
+
             row_dict['StartDt'] = row_dict['StartDt'].isoformat() if hasattr(row_dict['StartDt'], 'isoformat') else str(row_dict['StartDt'])
             row_dict['EndDt'] = row_dict['EndDt'].isoformat() if hasattr(row_dict['EndDt'], 'isoformat') else str(row_dict['EndDt'])
-            final_records.append(row_dict)
-            
+            assigned_items.append(row_dict)
+
+        final_records.extend(assigned_items)
+
     return final_records
