@@ -81,6 +81,10 @@ def build_associates_lookup(df_associates):
                 assigned_role = "Exceptions"
             elif "ip" in sheet_role.lower() or "gmd" in sheet_role.lower() or "in home" in sheet_role.lower() or "delivery" in sheet_role.lower():
                 assigned_role = "IP/GMD"
+            elif "exclude" in sheet_role.lower():
+                assigned_role = "Exclude"
+            elif "training" in sheet_role.lower() or "train" in sheet_role.lower():
+                assigned_role = "Training"
             else:
                 assigned_role = "Pickers"
                 
@@ -415,9 +419,9 @@ def calculate_staggered_lunches(roster_data):
     final_records = []
     active_roles = ["Pickers", "Picker", "Backroom", "Exceptions", "IP/GMD", "IPGMD"]
 
-    # Process excluded first to maintain them
-    if "Exclude" in df['Role'].values:
-        ex_group = df[df['Role'] == "Exclude"].to_dict('records')
+    # Process excluded and training first to maintain them without assigning breaks/coverage
+    if "Exclude" in df['Role'].values or "Training" in df['Role'].values:
+        ex_group = df[df['Role'].isin(["Exclude", "Training"])].to_dict('records')
         for item in ex_group:
             item['Break 1'] = "N/A"
             item['Lunch Time'] = "N/A"

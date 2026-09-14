@@ -27,15 +27,52 @@ const dbBody = document.getElementById('dbBody');
 
 // Modal Elements removed
 
-const ROLES = ["Pickers", "Backroom", "Exceptions", "IP/GMD", "Exclude"];
+const ROLES = ["Pickers", "Backroom", "Exceptions", "IP/GMD", "Exclude", "Training"];
+let currentStore = localStorage.getItem('opd_selected_store') || '';
+const storeSelect = document.getElementById('storeSelect');
 
 
 
 // Initialize
 async function init() {
     setupTabs();
+    setupStoreSelector();
+    setupMobileDrawer();
     await syncDatabase();
     loadDatabase();
+}
+
+function setupMobileDrawer() {
+    const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+    const closeSidebarBtn = document.getElementById('closeSidebarBtn');
+    const sidebarOverlay = document.getElementById('sidebarOverlay');
+    const sidebar = document.getElementById('appSidebar');
+
+    if (!sidebar) return;
+
+    const openDrawer = () => {
+        sidebar.classList.add('mobile-open');
+        sidebarOverlay?.classList.add('active');
+    };
+
+    const closeDrawer = () => {
+        sidebar.classList.remove('mobile-open');
+        sidebarOverlay?.classList.remove('active');
+    };
+
+    mobileMenuBtn?.addEventListener('click', openDrawer);
+    closeSidebarBtn?.addEventListener('click', closeDrawer);
+    sidebarOverlay?.addEventListener('click', closeDrawer);
+}
+
+function setupStoreSelector() {
+    if (!storeSelect) return;
+    storeSelect.addEventListener('change', async (e) => {
+        currentStore = e.target.value;
+        localStorage.setItem('opd_selected_store', currentStore);
+        await syncDatabase();
+        loadDatabase();
+    });
 }
 
 function setupTabs() {
@@ -68,8 +105,18 @@ async function loadDatabase() {
             </tr>
         `;
 
-        const res = await fetch(`${API_BASE}/associates`);
+        const storeParam = currentStore ? `?store=${encodeURIComponent(currentStore)}` : '';
+        const res = await fetch(`${API_BASE}/associates${storeParam}`);
         const data = await res.json();
+
+        if (data.active_store) {
+            currentStore = data.active_store;
+            localStorage.setItem('opd_selected_store', currentStore);
+        }
+
+        if (data.available_stores && data.available_stores.length > 0) {
+            populateStoreDropdown(data.available_stores, currentStore);
+        }
 
         if (data.sheet_url) {
             const openSheetBtn = document.getElementById('openSheetBtn');
@@ -92,6 +139,18 @@ async function loadDatabase() {
     } catch (e) {
         dbBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 2rem; color:red;">Failed to load database.</td></tr>`;
     }
+}
+
+function populateStoreDropdown(stores, activeStore) {
+    if (!storeSelect) return;
+    storeSelect.innerHTML = '';
+    stores.forEach(st => {
+        const opt = document.createElement('option');
+        opt.value = st;
+        opt.textContent = st;
+        if (st === activeStore) opt.selected = true;
+        storeSelect.appendChild(opt);
+    });
 }
 
 function createDbRow(assoc) {
@@ -252,7 +311,8 @@ document.getElementById('saveBatchBtn')?.addEventListener('click', async () => {
         });
 
         const payload = {
-            associates: allAssociates
+            associates: allAssociates,
+            store: currentStore
         };
 
         const res = await fetch(`${API_BASE}/associates/batch_update`, {
@@ -280,11 +340,19 @@ async function syncDatabase() {
         syncBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Syncing...';
         syncBtn.disabled = true;
 
-        const res = await fetch(`${API_BASE}/sync`);
+        const storeParam = currentStore ? `?store=${encodeURIComponent(currentStore)}` : '';
+        const res = await fetch(`${API_BASE}/sync${storeParam}`);
         const data = await res.json();
 
         if (data.status === 'success') {
             lastSyncTime.textContent = data.last_sync;
+            if (data.active_store) {
+                currentStore = data.active_store;
+                localStorage.setItem('opd_selected_store', currentStore);
+            }
+            if (data.available_stores) {
+                populateStoreDropdown(data.available_stores, currentStore);
+            }
             if (data.sheet_url) {
                 const openSheetBtn = document.getElementById('openSheetBtn');
                 if (openSheetBtn) openSheetBtn.href = data.sheet_url;
@@ -325,7 +393,8 @@ pdfUpload.addEventListener('change', async (e) => {
             </tr>
         `;
 
-        const res = await fetch(`${API_BASE}/upload`, {
+        const storeParam = currentStore ? `?store=${encodeURIComponent(currentStore)}` : '';
+        const res = await fetch(`${API_BASE}/upload${storeParam}`, {
             method: 'POST',
             body: formData
         });
@@ -504,11 +573,12 @@ function renderRoster() {
 
     // Helper to add icons to names like in original
     const getIconName = (name, role) => {
-        let clean = name.replace("🔴 ", "").replace("🔵 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("💖 ", "").replace("💙 ", "").replace("💛 ", "").replace("🧡 ", "");
+        let clean = name.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]\s*/gu, '').trim();
         if (role === "Pickers" || role === "Picker") return `🔴 ${clean}`;
         if (role === "Backroom") return `🔵 ${clean}`;
         if (role === "Exceptions") return `🟡 ${clean}`;
         if (role === "IP/GMD" || role === "IPGMD") return `🟠 ${clean}`;
+        if (role === "Training") return `🎓 ${clean}`;
         return clean;
     };
 
@@ -526,7 +596,7 @@ function renderRoster() {
     const roleLunchCounts = {};
 
     main_df.forEach(row => {
-        if (!row.Role || row.Role === 'Exclude') return;
+        if (!row.Role || row.Role === 'Exclude' || row.Role === 'Training') return;
         if (!roleBreakCounts[row.Role]) roleBreakCounts[row.Role] = {};
         if (!roleLunchCounts[row.Role]) roleLunchCounts[row.Role] = {};
 
@@ -641,11 +711,18 @@ function renderRoster() {
     document.querySelectorAll('.role-select').forEach(sel => {
         sel.addEventListener('change', (e) => {
             const idx = e.target.getAttribute('data-idx');
-            main_df[idx].Role = e.target.value;
-            main_df[idx].Associate = getIconName(main_df[idx].Associate, e.target.value);
+            const newRole = e.target.value;
+            main_df[idx].Role = newRole;
+            // Clean emojis off data store string so they don't compound
+            main_df[idx].Associate = main_df[idx].Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]\s*/gu, '').trim();
+            if (newRole === 'Exclude' || newRole === 'Training') {
+                main_df[idx]['Break 1'] = 'N/A';
+                main_df[idx]['Lunch Time'] = 'N/A';
+                main_df[idx]['Break 2'] = 'N/A';
+            }
             updateStats();
             if (calculationDone) updateCoverageTable();
-            renderRoster(); // Quick re-render to update icons
+            renderRoster(); // Quick re-render to update icons and break fields
         });
     });
 
@@ -724,7 +801,7 @@ downloadPdfBtn.addEventListener('click', () => {
     const tableData = [];
     main_df.forEach(row => {
         // Strip emojis and minor tags for clean PDF
-        let cleanName = row.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡]/g, "").replace(/\(M\)/g, "").trim();
+        let cleanName = row.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]/gu, "").replace(/\(M\)/g, "").trim();
         tableData.push([
             cleanName, 
             row.Role, 
@@ -869,7 +946,7 @@ function updateCoverageTable() {
         let pCount = 0, bCount = 0, eCount = 0, ipCount = 0;
 
         main_df.forEach(r => {
-            if (r.Role === 'Exclude') return;
+            if (r.Role === 'Exclude' || r.Role === 'Training') return;
             if (!r.StartDt) return;
             let sd = new Date(r.StartDt);
             let ed = new Date(r.EndDt);
@@ -938,13 +1015,14 @@ if (openManualAddBtn && manualAddModal) {
         manualAddSelect.innerHTML = '<option value="">Loading...</option>';
         
         try {
-            const res = await fetch(`${API_BASE}/associates`);
+            const storeParam = currentStore ? `?store=${encodeURIComponent(currentStore)}` : '';
+            const res = await fetch(`${API_BASE}/associates${storeParam}`);
             if (res.ok) {
                 const data = await res.json();
                 const associates = data.associates;
                 
-                // Filter out excluded ones
-                const active = associates.filter(a => a.Exclude?.toLowerCase() !== 'yes' && a.Name?.trim() !== '');
+                // Filter out excluded and training ones from manual roster add
+                const active = associates.filter(a => a.Exclude?.toLowerCase() !== 'yes' && a.Role?.toLowerCase() !== 'training' && a.Name?.trim() !== '');
                 
                 manualAddSelect.innerHTML = '<option value="">Select Associate...</option>';
                 active.forEach(a => {
@@ -1006,12 +1084,14 @@ if (openManualAddBtn && manualAddModal) {
         const isMinor = assoc['Minor Status']?.toLowerCase() === 'yes';
         const matchName = isMinor ? `(M) ${fmtName}` : fmtName;
         
-        // Role determination
         let assignedRole = "Pickers";
         const sheetRole = assoc.Role?.toLowerCase() || "";
         if (sheetRole.includes("picker")) assignedRole = "Pickers";
         else if (sheetRole.includes("backroom") || sheetRole.includes("dispense")) assignedRole = "Backroom";
         else if (sheetRole.includes("exception")) assignedRole = "Exceptions";
+        else if (sheetRole.includes("ip") || sheetRole.includes("gmd")) assignedRole = "IP/GMD";
+        else if (sheetRole.includes("train")) assignedRole = "Training";
+        else if (sheetRole.includes("exclude")) assignedRole = "Exclude";
         
         const pad = (n) => n < 10 ? '0' + n : n;
         const localIsoString = (d) => {

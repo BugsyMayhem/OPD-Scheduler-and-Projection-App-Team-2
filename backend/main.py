@@ -47,7 +47,8 @@ def get_sheet_id() -> str:
     return os.getenv("SHEET_ID", "1IwnNimOKM_COtfict4eHbeWjgsRXXN-e2m-DGn-ywH4")
 
 db_cache = {
-    "associates_df": pd.DataFrame(),
+    "stores": {},  # store_name -> {"df": DataFrame, "last_sync": str}
+    "available_stores": [],
     "last_sync": "Never"
 }
 
@@ -76,20 +77,45 @@ def get_gspread_client():
         
     raise FileNotFoundError(f"Missing Google Credentials file. Checked: {candidate_paths}")
 
+def get_worksheet(client, sheet_id: str, store_name: Optional[str] = None):
+    spreadsheet = client.open_by_key(sheet_id)
+    worksheets = spreadsheet.worksheets()
+    available = [ws.title for ws in worksheets]
+    db_cache["available_stores"] = available
+    
+    if store_name:
+        for ws in worksheets:
+            if ws.title.strip().lower() == store_name.strip().lower():
+                return ws, ws.title
+        # Also try matching store number substring (e.g., "3324" -> "3324 OPD Roster")
+        for ws in worksheets:
+            if store_name.strip().lower() in ws.title.strip().lower():
+                return ws, ws.title
+                
+    # Default to first worksheet
+    first_ws = worksheets[0]
+    return first_ws, first_ws.title
 
-def sync_sheets():
+def sync_sheets(store_name: Optional[str] = None):
     try:
         client = get_gspread_client()
         sheet_id = get_sheet_id()
-        sheet = client.open_by_key(sheet_id).sheet1
-        data = sheet.get_all_records()
+        ws, active_store = get_worksheet(client, sheet_id, store_name)
+        data = ws.get_all_records()
         
         df = pd.DataFrame(data)
-        db_cache["associates_df"] = df
-        db_cache["last_sync"] = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M %p")
+        sync_time = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M %p")
+        db_cache["stores"][active_store] = {
+            "df": df,
+            "last_sync": sync_time
+        }
+        db_cache["last_sync"] = sync_time
+        
         return {
             "status": "success",
-            "last_sync": db_cache["last_sync"],
+            "active_store": active_store,
+            "available_stores": db_cache["available_stores"],
+            "last_sync": sync_time,
             "sheet_id": sheet_id,
             "sheet_url": f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
         }
@@ -101,35 +127,73 @@ def sync_sheets():
 def startup_event():
     sync_sheets()
 
+@app.get("/api/stores")
+def get_stores():
+    try:
+        client = get_gspread_client()
+        sheet_id = get_sheet_id()
+        spreadsheet = client.open_by_key(sheet_id)
+        worksheets = [ws.title for ws in spreadsheet.worksheets()]
+        db_cache["available_stores"] = worksheets
+        return {"stores": worksheets}
+    except Exception as e:
+        return {"stores": db_cache.get("available_stores", [])}
+
 @app.get("/api/sync")
-def get_sync():
-    return sync_sheets()
+def get_sync(store: Optional[str] = None):
+    return sync_sheets(store)
 
 @app.get("/api/associates")
-def get_associates():
-    if db_cache["associates_df"].empty:
-        sync_sheets()
-    df = db_cache["associates_df"]
+def get_associates(store: Optional[str] = None):
+    client = get_gspread_client()
     sheet_id = get_sheet_id()
-    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
-    if df.empty:
-        return {"associates": [], "last_sync": db_cache["last_sync"], "sheet_id": sheet_id, "sheet_url": sheet_url}
     
-    # Send row index along with data so we know which row to update
+    # Check if we need to sync this specific store
+    target_store = store
+    if not target_store or target_store not in db_cache["stores"]:
+        sync_res = sync_sheets(target_store)
+        if sync_res.get("status") == "success":
+            target_store = sync_res.get("active_store")
+        elif not target_store and db_cache["stores"]:
+            target_store = list(db_cache["stores"].keys())[0]
+
+    store_entry = db_cache["stores"].get(target_store, {})
+    df = store_entry.get("df", pd.DataFrame())
+    last_sync = store_entry.get("last_sync", db_cache["last_sync"])
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+    
+    if df.empty:
+        return {
+            "associates": [],
+            "active_store": target_store,
+            "available_stores": db_cache["available_stores"],
+            "last_sync": last_sync,
+            "sheet_id": sheet_id,
+            "sheet_url": sheet_url
+        }
+    
     data = df.fillna("").reset_index().rename(columns={"index": "row_index"}).to_dict('records')
-    return {"associates": data, "last_sync": db_cache["last_sync"], "sheet_id": sheet_id, "sheet_url": sheet_url}
+    return {
+        "associates": data,
+        "active_store": target_store,
+        "available_stores": db_cache["available_stores"],
+        "last_sync": last_sync,
+        "sheet_id": sheet_id,
+        "sheet_url": sheet_url
+    }
 
 class AssociateBatchUpdate(BaseModel):
     associates: List[Dict[str, Any]]
+    store: Optional[str] = None
 
 @app.post("/api/associates/batch_update")
 def batch_update_associates(payload: AssociateBatchUpdate):
     try:
         client = get_gspread_client()
         sheet_id = get_sheet_id()
-        sheet = client.open_by_key(sheet_id).sheet1
+        ws, active_store = get_worksheet(client, sheet_id, payload.store)
         
-        headers = [h for h in sheet.row_values(1) if h != "PPH"]
+        headers = [h for h in ws.row_values(1) if h != "PPH"]
         if not headers:
             headers = ["Name", "User ID", "Status", "Employment Type", "Minor Status", "Exclude", "Completed", "Role"]
         elif "User ID" not in headers:
@@ -152,27 +216,33 @@ def batch_update_associates(payload: AssociateBatchUpdate):
                 row.append(assoc.get(h, ""))
             row_data.append(row)
             
-        sheet.clear()
+        ws.clear()
         if not row_data:
             row_data = [headers]
             
         # Write array starting at A1 natively
-        sheet.update(values=row_data, range_name="A1")
+        ws.update(values=row_data, range_name="A1")
         
-        # Refresh cache after write
-        sync_sheets()
-        return {"status": "success"}
+        # Refresh cache for this store after write
+        sync_sheets(active_store)
+        return {"status": "success", "active_store": active_store}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), store: Optional[str] = None):
     filename_lower = file.filename.lower()
     if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
         raise HTTPException(status_code=400, detail="File must be a PDF or CSV schedule")
         
-    if db_cache["associates_df"].empty:
-        sync_sheets()
+    target_store = store
+    if not target_store or target_store not in db_cache["stores"]:
+        sync_res = sync_sheets(target_store)
+        if sync_res.get("status") == "success":
+            target_store = sync_res.get("active_store")
+            
+    store_entry = db_cache["stores"].get(target_store, {})
+    associates_df = store_entry.get("df", pd.DataFrame())
         
     contents = await file.read()
     file_bytes = io.BytesIO(contents)
@@ -180,13 +250,14 @@ async def upload_pdf(file: UploadFile = File(...)):
     try:
         if filename_lower.endswith(".csv") or filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls"):
             is_excel = filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")
-            roster_data, mismatches = process_csv(file_bytes, db_cache["associates_df"], is_excel=is_excel)
+            roster_data, mismatches = process_csv(file_bytes, associates_df, is_excel=is_excel)
         else:
-            roster_data, mismatches = process_pdf(file_bytes, db_cache["associates_df"])
+            roster_data, mismatches = process_pdf(file_bytes, associates_df)
             
         return {
             "roster": roster_data,
-            "mismatches": mismatches
+            "mismatches": mismatches,
+            "active_store": target_store
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Schedule processing failed: {str(e)}")
