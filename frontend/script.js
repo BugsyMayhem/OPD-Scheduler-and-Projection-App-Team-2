@@ -1,7 +1,8 @@
 const API_BASE = '/api';
 let main_df = [];
 let calculationDone = false;
-let currentMismatches = [];
+let currentOpdMismatches = [];
+let currentStoreMismatches = [];
 let uploadedPdfName = "OPD_Roster";
 
 // DOM Elements
@@ -11,8 +12,14 @@ const pdfUpload = document.getElementById('pdfUpload');
 const calcLunchesBtn = document.getElementById('calcLunchesBtn');
 const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 const rosterBody = document.getElementById('rosterBody');
-const mismatchAlert = document.getElementById('mismatchAlert');
-const mismatchText = document.getElementById('mismatchText');
+
+const opdMismatchAlert = document.getElementById('opdMismatchAlert');
+const opdMismatchNames = document.getElementById('opdMismatchNames');
+const opdTargetDbName = document.getElementById('opdTargetDbName');
+
+const storeMismatchAlert = document.getElementById('storeMismatchAlert');
+const storeMismatchNames = document.getElementById('storeMismatchNames');
+const storeTargetDbName = document.getElementById('storeTargetDbName');
 const pickerCount = document.getElementById('pickerCount');
 const backroomCount = document.getElementById('backroomCount');
 const exceptionCount = document.getElementById('exceptionCount');
@@ -30,16 +37,19 @@ const dbBody = document.getElementById('dbBody');
 const ROLES = ["Pickers", "Backroom", "Exceptions", "IP/GMD", "Exclude", "Training"];
 let currentStore = localStorage.getItem('opd_selected_store') || '';
 const storeSelect = document.getElementById('storeSelect');
-
-
+let support_df = [];
+let all_store_associates_from_file = [];
+let support_associates_db = [];
 
 // Initialize
 async function init() {
     setupTabs();
     setupStoreSelector();
     setupMobileDrawer();
+    setupSupportSubtabs();
     await syncDatabase();
     loadDatabase();
+    loadSupportDatabase();
 }
 
 function setupMobileDrawer() {
@@ -72,6 +82,7 @@ function setupStoreSelector() {
         localStorage.setItem('opd_selected_store', currentStore);
         await syncDatabase();
         loadDatabase();
+        loadSupportDatabase();
     });
 }
 
@@ -214,24 +225,26 @@ function createDbRow(assoc) {
     return tr;
 }
 
-// Quick Add Mismatches
-const quickAddBtn = document.getElementById('quickAddBtn');
-if (quickAddBtn) {
-    quickAddBtn.addEventListener('click', () => {
+// Quick Add OPD Mismatches
+const quickAddOpdBtn = document.getElementById('quickAddOpdBtn');
+if (quickAddOpdBtn) {
+    quickAddOpdBtn.addEventListener('click', () => {
         // Switch to Database tab
-        document.querySelector('[data-target="databaseView"]').click();
+        const dbTab = document.querySelector('[data-target="databaseView"]');
+        if (dbTab) dbTab.click();
 
-        // Hide mismatch alert
-        mismatchAlert.classList.add('hidden');
+        // Hide OPD mismatch alert
+        if (opdMismatchAlert) opdMismatchAlert.classList.add('hidden');
 
         // Remove empty state if present
         const emptyState = document.querySelector('.empty-state');
         if (emptyState) emptyState.remove();
 
-        currentMismatches.forEach(item => {
+        const count = currentOpdMismatches.length;
+        currentOpdMismatches.forEach(item => {
             const rawName = typeof item === 'object' && item !== null ? (item.name || '') : String(item || '');
             const userId = typeof item === 'object' && item !== null ? (item.user_id || item['User ID'] || '') : '';
-            const role = typeof item === 'object' && item !== null ? (item.role || item.Role || '') : '';
+            const role = typeof item === 'object' && item !== null ? (item.role || item.Role || 'Pickers') : 'Pickers';
 
             // Keep full first and last name with clean capitalization
             let fmtName = rawName.trim().replace(/\b\w/g, l => l.toUpperCase());
@@ -240,16 +253,86 @@ if (quickAddBtn) {
                 row_index: 'new',
                 Name: fmtName,
                 'User ID': userId,
-                Role: role
+                Role: role,
+                'Employment Type': 'Full-Time',
+                'Minor Status': 'No',
+                'Exclude': 'No'
             });
             dbBody.prepend(newRow);
         });
 
-        currentMismatches = [];
+        currentOpdMismatches = [];
 
         // Focus the first newly added name input
         const firstInput = dbBody.querySelector('.db-name');
         if (firstInput) firstInput.focus();
+
+        alert(`Added ${count} associate(s) to the OPD database table. Please review and click "Save Changes" to commit.`);
+    });
+}
+
+// Quick Add Total Store Mismatches
+const quickAddStoreBtn = document.getElementById('quickAddStoreBtn');
+if (quickAddStoreBtn) {
+    quickAddStoreBtn.addEventListener('click', async () => {
+        let storeList = [];
+        if (all_store_associates_from_file && all_store_associates_from_file.length > 0) {
+            storeList = all_store_associates_from_file;
+        } else if (currentStoreMismatches && currentStoreMismatches.length > 0) {
+            storeList = currentStoreMismatches.map(s => ({
+                Name: s.name,
+                UserId: s.user_id || '',
+                JobName: s.job || 'Store Associate',
+                StoreSupport: 'No',
+                MinorStatus: 'No',
+                Notes: ''
+            }));
+        }
+
+        if (storeList.length === 0) {
+            alert("No store associates to add.");
+            return;
+        }
+
+        const origHtml = quickAddStoreBtn.innerHTML;
+        try {
+            quickAddStoreBtn.disabled = true;
+            quickAddStoreBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Adding to Store Database...';
+
+            const res = await fetch(`${API_BASE}/support_associates/sync_from_csv`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ store_associates: storeList, store: currentStore })
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Sync failed');
+            }
+
+            const result = await res.json();
+            if (storeMismatchAlert) storeMismatchAlert.classList.add('hidden');
+            currentStoreMismatches = [];
+
+            alert(`Successfully added ${result.new_added || 0} associates to ${result.support_store || 'Total Store Database'}! (Total registered: ${result.total || 0})`);
+            await loadSupportDatabase();
+        } catch (err) {
+            alert('Error adding store associates: ' + err.message);
+        } finally {
+            quickAddStoreBtn.disabled = false;
+            quickAddStoreBtn.innerHTML = origHtml;
+        }
+    });
+}
+
+// Open Store Directory from alert
+const viewStoreDbFromAlertBtn = document.getElementById('viewStoreDbFromAlertBtn');
+if (viewStoreDbFromAlertBtn) {
+    viewStoreDbFromAlertBtn.addEventListener('click', () => {
+        const suppTabBtn = document.querySelector('[data-target="supportView"]');
+        if (suppTabBtn) suppTabBtn.click();
+        const subtabBtn = document.getElementById('subtabSupportDb');
+        if (subtabBtn) subtabBtn.click();
     });
 }
 
@@ -356,6 +439,8 @@ async function syncDatabase() {
             if (data.sheet_url) {
                 const openSheetBtn = document.getElementById('openSheetBtn');
                 if (openSheetBtn) openSheetBtn.href = data.sheet_url;
+                const openSupportSheetBtn = document.getElementById('openSupportSheetBtn');
+                if (openSupportSheetBtn) openSupportSheetBtn.href = data.sheet_url;
             }
         } else {
             lastSyncTime.textContent = 'Sync Failed';
@@ -366,6 +451,7 @@ async function syncDatabase() {
         syncBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> Sync Database';
         syncBtn.disabled = false;
         loadDatabase(); // Refresh the table after sync
+        loadSupportDatabase(); // Refresh store support table after sync
     }
 }
 
@@ -408,35 +494,64 @@ pdfUpload.addEventListener('change', async (e) => {
 
         // Append new data to existing df
         main_df = [...main_df, ...data.roster];
+        support_df = data.support_roster || [];
+        all_store_associates_from_file = data.store_associates || [];
 
-        if (data.mismatches && data.mismatches.length > 0) {
-            currentMismatches = data.mismatches;
-            mismatchAlert.classList.remove('hidden');
-            const displayNames = data.mismatches.map(m => {
+        // 1. OPD Database Mismatches Alert
+        const opdMis = data.opd_mismatches || (data.mismatches || []);
+        if (opdTargetDbName) opdTargetDbName.textContent = currentStore || 'OPD Roster';
+
+        if (opdMis.length > 0) {
+            currentOpdMismatches = opdMis;
+            if (opdMismatchAlert) opdMismatchAlert.classList.remove('hidden');
+            const displayNames = opdMis.map(m => {
                 if (typeof m === 'object' && m !== null) {
                     return m.user_id ? `${m.name} (${m.user_id})` : m.name;
                 }
                 return m;
             });
-            mismatchText.textContent = `These names were found in the schedule but not in the database: ${displayNames.join(', ')}`;
+            if (opdMismatchNames) opdMismatchNames.textContent = displayNames.join(', ');
         } else {
-            mismatchAlert.classList.add('hidden');
-            currentMismatches = [];
+            if (opdMismatchAlert) opdMismatchAlert.classList.add('hidden');
+            currentOpdMismatches = [];
+        }
+
+        // 2. Total Store Database Mismatches Alert
+        const storeMis = data.store_mismatches || [];
+        const suppSheetTitle = data.support_store || (currentStore ? currentStore.replace(/opd\s*roster/i, 'Store Support') : 'Store Support');
+        if (storeTargetDbName) storeTargetDbName.textContent = suppSheetTitle;
+
+        if (storeMis.length > 0) {
+            currentStoreMismatches = storeMis;
+            if (storeMismatchAlert) storeMismatchAlert.classList.remove('hidden');
+            const displayStoreNames = storeMis.map(s => {
+                if (typeof s === 'object' && s !== null) {
+                    const jobStr = s.job ? ` - ${s.job}` : '';
+                    return s.user_id ? `${s.name} (${s.user_id}${jobStr})` : `${s.name}${jobStr}`;
+                }
+                return s;
+            });
+            if (storeMismatchNames) storeMismatchNames.textContent = displayStoreNames.join(', ');
+        } else {
+            if (storeMismatchAlert) storeMismatchAlert.classList.add('hidden');
+            currentStoreMismatches = [];
         }
 
         calculationDone = false;
         renderRoster();
         updateStats();
+        renderSupportViews();
 
         calcLunchesBtn.disabled = main_df.length === 0;
-        downloadPdfBtn.disabled = main_df.length === 0;
+        downloadPdfBtn.disabled = (main_df.length === 0 && support_df.length === 0);
         
         const clearPdfBtn = document.getElementById('clearPdfBtn');
-        if (clearPdfBtn) clearPdfBtn.disabled = main_df.length === 0;
+        if (clearPdfBtn) clearPdfBtn.disabled = (main_df.length === 0 && support_df.length === 0);
 
     } catch (error) {
         alert("Error: " + error.message);
         renderRoster(); // Fallback to previous
+        renderSupportViews();
     }
 
     // Reset file input
@@ -448,12 +563,16 @@ const clearPdfBtn = document.getElementById('clearPdfBtn');
 if (clearPdfBtn) {
     clearPdfBtn.addEventListener('click', () => {
         main_df = [];
+        support_df = [];
+        all_store_associates_from_file = [];
         calculationDone = false;
         
         // Reset UI metrics
         pickerCount.textContent = '0';
         backroomCount.textContent = '0';
         exceptionCount.textContent = '0';
+        const supportCountEl = document.getElementById('supportCount');
+        if (supportCountEl) supportCountEl.textContent = '0';
         
         // Reset Tables
         rosterBody.innerHTML = `
@@ -472,8 +591,14 @@ if (clearPdfBtn) {
             </tr>
         `;
         
+        // Reset Store Support Views
+        renderSupportViews();
+        
         // Hide mismatches
-        mismatchAlert.classList.add('hidden');
+        if (opdMismatchAlert) opdMismatchAlert.classList.add('hidden');
+        if (storeMismatchAlert) storeMismatchAlert.classList.add('hidden');
+        currentOpdMismatches = [];
+        currentStoreMismatches = [];
         
         // Disable buttons
         calcLunchesBtn.disabled = true;
@@ -780,11 +905,13 @@ function updateStats() {
     exceptionCount.textContent = exceptions;
     const ipgmdCountEl = document.getElementById('ipgmdCount');
     if (ipgmdCountEl) ipgmdCountEl.textContent = ipgmd;
+    const supportCountEl = document.getElementById('supportCount');
+    if (supportCountEl) supportCountEl.textContent = support_df ? support_df.length : 0;
 }
 
 // Download PDF
 downloadPdfBtn.addEventListener('click', () => {
-    if (main_df.length === 0) return;
+    if (main_df.length === 0 && support_df.length === 0) return;
 
     // Output Context
     const docTitle = uploadedPdfName;
@@ -797,44 +924,52 @@ downloadPdfBtn.addEventListener('click', () => {
     doc.setFontSize(16);
     doc.text(docTitle, 14, 20);
 
-    // Prepare Data
-    const tableData = [];
-    main_df.forEach(row => {
-        // Strip emojis and minor tags for clean PDF
-        let cleanName = row.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]/gu, "").replace(/\(M\)/g, "").trim();
-        tableData.push([
-            cleanName, 
-            row.Role, 
-            row.Shift, 
-            row['Break 1'] || 'N/A', 
-            row['Lunch Time'] || 'N/A', 
-            row['Break 2'] || 'N/A'
-        ]);
-    });
+    // Prepare OPD Roster Data
+    if (main_df.length > 0) {
+        const tableData = [];
+        main_df.forEach(row => {
+            // Strip emojis and minor tags for clean PDF
+            let cleanName = row.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]/gu, "").replace(/\(M\)/g, "").trim();
+            tableData.push([
+                cleanName, 
+                row.Role, 
+                row.Shift, 
+                row['Break 1'] || 'N/A', 
+                row['Lunch Time'] || 'N/A', 
+                row['Break 2'] || 'N/A'
+            ]);
+        });
 
-    doc.autoTable({
-        startY: 30,
-        head: [['Associate', 'Role', 'Shift', 'Break 1', 'Lunch Time', 'Break 2']],
-        body: tableData,
-        theme: 'striped',
-        headStyles: { fillColor: [0, 113, 206] }, // Walmart Blue
-        styles: { font: 'helvetica', fontSize: 8.5 },
-        columnStyles: {
-            0: { cellWidth: 46 },
-            1: { cellWidth: 28 },
-            2: { cellWidth: 34 },
-            3: { cellWidth: 26 },
-            4: { cellWidth: 26 },
-            5: { cellWidth: 26 }
-        }
-    });
+        doc.autoTable({
+            startY: 28,
+            head: [['Associate', 'Role', 'Shift', 'Break 1', 'Lunch Time', 'Break 2']],
+            body: tableData,
+            theme: 'striped',
+            headStyles: { fillColor: [0, 113, 206] }, // Walmart Blue
+            rowPageBreak: 'avoid',
+            styles: { font: 'helvetica', fontSize: 8.5 },
+            columnStyles: {
+                0: { cellWidth: 46 },
+                1: { cellWidth: 28 },
+                2: { cellWidth: 34 },
+                3: { cellWidth: 26 },
+                4: { cellWidth: 26 },
+                5: { cellWidth: 26 }
+            }
+        });
+    }
 
     // Add Hourly Coverage Table
-    if (calculationDone) {
-        let finalY = doc.lastAutoTable.finalY + 15 || 30;
+    if (calculationDone && main_df.length > 0) {
+        let finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY + 12 : 28);
+        if (finalY > 230) {
+            doc.addPage();
+            finalY = 20;
+        }
+
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(14);
-        doc.text("Hourly Coverage", 14, finalY);
+        doc.setFontSize(13);
+        doc.text("OPD Hourly Staffing Coverage", 14, finalY);
 
         const coverageData = [];
         const rows = document.querySelectorAll('#coverageBody tr');
@@ -852,14 +987,219 @@ downloadPdfBtn.addEventListener('click', () => {
             const headRow = [Array.from(headCells).map(th => th.innerText)];
 
             doc.autoTable({
-                startY: finalY + 5,
+                startY: finalY + 4,
                 head: headRow,
                 body: coverageData,
                 theme: 'striped',
                 headStyles: { fillColor: [0, 113, 206] },
-                styles: { font: 'helvetica', fontSize: 10 }
+                rowPageBreak: 'avoid',
+                styles: { font: 'helvetica', fontSize: 9 }
             });
         }
+    }
+
+    // Add Store Support Coverage Table
+    if (support_df && support_df.length > 0) {
+        let finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY + 12 : 28);
+        if (finalY > 220) {
+            doc.addPage();
+            finalY = 20;
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(13);
+        doc.text("Daily Store Support Availability (Cross-Trained Associates)", 14, finalY);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8.5);
+        doc.setTextColor(80, 80, 80);
+        doc.text(`Total On-Duty Support: ${support_df.length} Associates | Eligible to support OPD throughout their scheduled shifts`, 14, finalY + 5);
+        doc.setTextColor(0, 0, 0);
+
+        const supportTableData = [];
+        support_df.forEach(s => {
+            const cleanName = s.Associate.replace(/[🔴🔵🟡🟠💖💙💛🧡🎓]/gu, "").replace(/\(M\)/g, "").trim();
+            supportTableData.push([
+                cleanName,
+                s.JobName || 'Store Associate',
+                s.Shift,
+                `${s.Duration ? s.Duration.toFixed(1) : 8} hrs`,
+                s.Notes || 'Available to support'
+            ]);
+        });
+
+        doc.autoTable({
+            startY: finalY + 8,
+            head: [['Support Associate', 'Home Department / Job Title', 'Scheduled Shift', 'Hours', 'Notes']],
+            body: supportTableData,
+            theme: 'striped',
+            headStyles: { fillColor: [2, 132, 199] }, // Cyan / Walmart Secondary
+            styles: { font: 'helvetica', fontSize: 8.5 },
+            columnStyles: {
+                0: { cellWidth: 46 },
+                1: { cellWidth: 50 },
+                2: { cellWidth: 35 },
+                3: { cellWidth: 20 },
+                4: { cellWidth: 35 }
+            }
+        });
+
+        // Add Hourly Support Availability Breakdown table in PDF
+        let suppTableFinalY = doc.lastAutoTable.finalY + 10;
+        if (suppTableFinalY > 240) {
+            doc.addPage();
+            suppTableFinalY = 20;
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.text("Hourly Store Support Availability Summary", 14, suppTableFinalY);
+
+        const timelineHours = [];
+        const timelineCounts = [];
+        const hourlyDetailedRows = [];
+
+        for (let h = 4; h <= 21; h++) {
+            let lblH = h <= 12 ? h : h - 12;
+            let lblAmpm = h < 12 ? 'AM' : 'PM';
+            let nextH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
+            let nextAmpm = (h + 1) < 12 ? 'AM' : (h + 1 === 24 ? 'AM' : 'PM');
+            
+            timelineHours.push(`${lblH}${lblAmpm.toLowerCase()}`);
+            
+            const staffInHour = [];
+            const seenHourAssocs = new Set();
+
+            support_df.forEach(s => {
+                if (!s.StartDt || !s.EndDt) return;
+                let sd = new Date(s.StartDt);
+                let ed = new Date(s.EndDt);
+                let sm = sd.getHours() * 60 + sd.getMinutes();
+                let em = ed.getHours() * 60 + ed.getMinutes();
+                if (em < sm) em += 24 * 60;
+                if (sm < (h + 1) * 60 && em > h * 60) {
+                    const key = (s.UserId || s.Associate || s.Name || '').toLowerCase().trim();
+                    if (!seenHourAssocs.has(key)) {
+                        seenHourAssocs.add(key);
+                        let cleanName = (s.Name || s.Associate || '')
+                            .replace(/[🔴🔵🟡🧡💖💙💛🧡🎓]/gu, '')
+                            .replace(/\([A-Z0-9_\-]+\)/gi, '') // Remove (JAKRUEG)
+                            .replace(/\(M\)/gi, '')
+                            .trim();
+
+                        const nameParts = cleanName.split(/\s+/).filter(Boolean);
+                        const dedupParts = [];
+                        nameParts.forEach(p => {
+                            if (dedupParts.length === 0 || dedupParts[dedupParts.length - 1].toLowerCase() !== p.toLowerCase()) {
+                                dedupParts.push(p);
+                            }
+                        });
+                        cleanName = dedupParts.join(' ').trim();
+                        staffInHour.push(cleanName);
+                    }
+                }
+            });
+
+            timelineCounts.push(staffInHour.length.toString());
+
+            if (staffInHour.length > 0) {
+                hourlyDetailedRows.push({
+                    timeRange: `${lblH}:00 ${lblAmpm} - ${nextH}:00 ${nextAmpm}`,
+                    count: `${staffInHour.length} Support`,
+                    namesText: staffInHour.join('  •  '),
+                    namesList: staffInHour
+                });
+            }
+        }
+
+        doc.autoTable({
+            startY: suppTableFinalY + 4,
+            head: [timelineHours],
+            body: [timelineCounts],
+            theme: 'grid',
+            headStyles: { fillColor: [4, 30, 66], fontSize: 7, halign: 'center' }, // Walmart Dark Blue
+            styles: { font: 'helvetica', fontSize: 7.5, halign: 'center' }
+        });
+
+        // Add Hour-by-Hour Associate Roster Breakdown in PDF
+        if (hourlyDetailedRows.length > 0) {
+            let detailFinalY = doc.lastAutoTable.finalY + 10;
+            if (detailFinalY > 230) {
+                doc.addPage();
+                detailFinalY = 20;
+            }
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(11);
+            doc.text("Hour-by-Hour Store Support Staff On-Duty", 14, detailFinalY);
+
+            const tableBody = hourlyDetailedRows.map(r => [r.timeRange, r.count, r.namesText]);
+
+            doc.autoTable({
+                startY: detailFinalY + 4,
+                head: [['Hour Window', 'Staff Count', 'Scheduled Support Associates']],
+                body: tableBody,
+                theme: 'striped',
+                headStyles: { fillColor: [0, 113, 206] },
+                rowPageBreak: 'avoid',
+                styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.5 },
+                columnStyles: {
+                    0: { cellWidth: 38, fontStyle: 'bold' },
+                    1: { cellWidth: 26, halign: 'center' },
+                    2: { cellWidth: 'auto', textColor: [255, 255, 255] }
+                },
+                didDrawCell: function(data) {
+                    if (data.section === 'body' && data.column.index === 2) {
+                        const rowIndex = data.row.index;
+                        const rowData = hourlyDetailedRows[rowIndex];
+                        if (!rowData || !rowData.namesList || rowData.namesList.length === 0) return;
+
+                        // Repaint background cleanly before custom bold/regular text rendering
+                        const isEven = rowIndex % 2 === 0;
+                        const bg = isEven ? [255, 255, 255] : [245, 245, 245];
+                        doc.setFillColor(bg[0], bg[1], bg[2]);
+                        doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'F');
+
+                        // Draw names with alternating bold / regular font
+                        const paddingX = 2.5;
+                        const startX = data.cell.x + paddingX;
+                        const maxX = data.cell.x + data.cell.width - paddingX;
+                        let currentX = startX;
+                        let currentY = data.cell.y + 4.6;
+                        const lineHeight = 3.6;
+
+                        doc.setFontSize(8);
+
+                        rowData.namesList.forEach((name, idx) => {
+                            const isBold = (idx % 2 === 0);
+                            doc.setFont("helvetica", isBold ? "bold" : "normal");
+                            doc.setTextColor(isBold ? 15 : 60, isBold ? 23 : 60, isBold ? 42 : 60);
+
+                            const nameWidth = doc.getTextWidth(name);
+                            if (currentX + nameWidth > maxX && currentX > startX) {
+                                currentX = startX;
+                                currentY += lineHeight;
+                            }
+                            doc.text(name, currentX, currentY);
+                            currentX += nameWidth;
+
+                            if (idx < rowData.namesList.length - 1) {
+                                doc.setFont("helvetica", "normal");
+                                doc.setTextColor(140, 140, 140);
+                                const sep = "  •  ";
+                                const sepWidth = doc.getTextWidth(sep);
+                                if (currentX + sepWidth > maxX && currentX > startX) {
+                                currentX = startX;
+                                currentY += lineHeight;
+                            }
+                            doc.text(sep, currentX, currentY);
+                            currentX += sepWidth;
+                        }
+                    });
+                }
+            }
+        });
+    }
     }
 
     doc.save(`${docTitle}.pdf`);
@@ -1173,4 +1513,569 @@ function filterDatabaseTable() {
 
 if (dbSearchInput) {
     dbSearchInput.addEventListener('input', filterDatabaseTable);
+}
+
+// ==========================================
+// STORE SUPPORT IMPLEMENTATION
+// ==========================================
+
+// Hourly View state (cards vs matrix)
+let currentHourlySupportView = 'cards';
+let hourlySupportSearchTerm = '';
+
+function setupSupportSubtabs() {
+    const subtabToday = document.getElementById('subtabTodaySupport');
+    const subtabDb = document.getElementById('subtabSupportDb');
+    const todaySection = document.getElementById('todaySupportSection');
+    const dbSection = document.getElementById('supportDbSection');
+
+    if (subtabToday && subtabDb) {
+        subtabToday.addEventListener('click', () => {
+            subtabToday.classList.add('active');
+            subtabDb.classList.remove('active');
+            if (todaySection) todaySection.classList.remove('hidden');
+            if (dbSection) dbSection.classList.add('hidden');
+        });
+
+        subtabDb.addEventListener('click', () => {
+            subtabDb.classList.add('active');
+            subtabToday.classList.remove('active');
+            if (dbSection) dbSection.classList.remove('hidden');
+            if (todaySection) todaySection.classList.add('hidden');
+        });
+    }
+
+    // View Toggle: Hour Cards vs Matrix Table
+    const btnViewHourCards = document.getElementById('btnViewHourCards');
+    const btnViewMatrix = document.getElementById('btnViewMatrix');
+    const cardsContainer = document.getElementById('supportHourCardsContainer');
+    const matrixContainer = document.getElementById('supportMatrixContainer');
+
+    if (btnViewHourCards && btnViewMatrix) {
+        btnViewHourCards.addEventListener('click', () => {
+            currentHourlySupportView = 'cards';
+            btnViewHourCards.classList.add('active');
+            btnViewMatrix.classList.remove('active');
+            if (cardsContainer) cardsContainer.classList.remove('hidden');
+            if (matrixContainer) matrixContainer.classList.add('hidden');
+        });
+
+        btnViewMatrix.addEventListener('click', () => {
+            currentHourlySupportView = 'matrix';
+            btnViewMatrix.classList.add('active');
+            btnViewHourCards.classList.remove('active');
+            if (cardsContainer) cardsContainer.classList.add('hidden');
+            if (matrixContainer) matrixContainer.classList.remove('hidden');
+        });
+    }
+
+    // Search filter for hourly support view
+    const hourlySearchInput = document.getElementById('supportHourlySearchInput');
+    if (hourlySearchInput) {
+        hourlySearchInput.addEventListener('input', (e) => {
+            hourlySupportSearchTerm = e.target.value.toLowerCase().trim();
+            renderSupportHourCards();
+        });
+    }
+}
+
+function renderSupportViews() {
+    renderSupportTimeline();
+    updateSupportBanners();
+}
+
+function updateSupportBanners() {
+    const bannerCount = document.getElementById('bannerSupportCount');
+    const bannerHours = document.getElementById('bannerSupportHours');
+    const bannerPool = document.getElementById('bannerSupportPool');
+    const todayCountBadge = document.getElementById('todaySupportCountBadge');
+    const supportCountEl = document.getElementById('supportCount');
+
+    const totalCount = support_df ? support_df.length : 0;
+    if (bannerCount) bannerCount.textContent = totalCount;
+    if (todayCountBadge) todayCountBadge.textContent = totalCount;
+    if (supportCountEl) supportCountEl.textContent = totalCount;
+
+    let totalHrs = 0;
+    if (support_df) {
+        support_df.forEach(s => {
+            totalHrs += (s.Duration || 0);
+        });
+    }
+    if (bannerHours) bannerHours.textContent = `${totalHrs.toFixed(1)} hrs`;
+
+    const activePool = support_associates_db.filter(a => {
+        const val = String(a['Store Support'] || a.StoreSupport || '').trim().toLowerCase();
+        return val === 'yes' || val === 'true';
+    }).length;
+    if (bannerPool) bannerPool.textContent = `${activePool} Active`;
+}
+
+// Renders the Hour-by-Hour Columns & Cards layout
+function renderSupportHourCards() {
+    const grid = document.getElementById('supportHourCardsGrid');
+    if (!grid) return;
+
+    if (!support_df || support_df.length === 0) {
+        grid.innerHTML = `
+            <div style="flex: 1; text-align: center; padding: 3rem 1rem; color: #64748b; background: #f8fafc; border-radius: 10px; border: 1px dashed #cbd5e1;">
+                <i class="fa-solid fa-handshake-slash fa-2x" style="margin-bottom: 0.75rem; color: #94a3b8; display: block;"></i>
+                <h4 style="font-weight: 600; color: #334155; margin-bottom: 0.35rem;">No Store Support Scheduled Today</h4>
+                <p style="font-size: 0.85rem; color: #94a3b8; max-width: 480px; margin: 0 auto;">
+                    Upload a full store CSV schedule or enable "Store Support" in the Store Directory tab to see hourly support availability.
+                </p>
+            </div>
+        `;
+        return;
+    }
+
+    // Build timeline hours from 4 AM (4) to 9 PM (21)
+    const hours = [];
+    for (let h = 4; h <= 21; h++) {
+        let lblH = h <= 12 ? h : h - 12;
+        let lblAmpm = h < 12 ? 'AM' : 'PM';
+        let nextH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
+        let nextAmpm = (h + 1) < 12 ? 'AM' : (h + 1 === 24 ? 'AM' : 'PM');
+        hours.push({
+            hour: h,
+            label: `${lblH} ${lblAmpm}`,
+            timeRange: `${lblH}:00 ${lblAmpm} - ${nextH}:00 ${nextAmpm}`
+        });
+    }
+
+    grid.innerHTML = '';
+
+    hours.forEach(h => {
+        const hStart = h.hour * 60;
+        const hEnd = (h.hour + 1) * 60;
+
+        // Find all associates scheduled during this hour (deduplicated per associate)
+        const activeAssocs = [];
+        const seenAssocHourKeys = new Set();
+
+        support_df.forEach(assoc => {
+            let sm = 0, em = 0;
+            if (assoc.StartDt && assoc.EndDt) {
+                let sd = new Date(assoc.StartDt);
+                let ed = new Date(assoc.EndDt);
+                sm = sd.getHours() * 60 + sd.getMinutes();
+                em = ed.getHours() * 60 + ed.getMinutes();
+                if (em < sm) em += 24 * 60;
+            }
+
+            if (sm < hEnd && em > hStart) {
+                const assocKey = (assoc.UserId || assoc.Associate || assoc.Name || '').toLowerCase().trim();
+                if (assocKey && seenAssocHourKeys.has(assocKey)) return;
+                if (assocKey) seenAssocHourKeys.add(assocKey);
+
+                // Apply search filter if active
+                if (hourlySupportSearchTerm) {
+                    const name = (assoc.Associate || '').toLowerCase();
+                    const job = (assoc.JobName || '').toLowerCase();
+                    const notes = (assoc.Notes || '').toLowerCase();
+                    const shift = (assoc.Shift || '').toLowerCase();
+                    if (!name.includes(hourlySupportSearchTerm) && !job.includes(hourlySupportSearchTerm) && !notes.includes(hourlySupportSearchTerm) && !shift.includes(hourlySupportSearchTerm)) {
+                        return;
+                    }
+                }
+                activeAssocs.push(assoc);
+            }
+        });
+
+        const count = activeAssocs.length;
+        const hasStaff = count > 0;
+        const isPeak = count >= 12;
+
+        const colCard = document.createElement('div');
+        colCard.className = `hour-col-card ${hasStaff ? 'has-staff' : ''} ${isPeak ? 'peak-staff' : ''}`;
+
+        // Header
+        const countBadgeClass = count === 0 ? 'zero' : (isPeak ? 'peak' : '');
+        const countBadgeText = count === 0 ? '0 Support' : `${count} Support`;
+
+        colCard.innerHTML = `
+            <div class="hour-col-header">
+                <div class="hour-col-time">
+                    <span class="hour-col-label">${h.label}</span>
+                    <span class="hour-col-sub">${h.timeRange}</span>
+                </div>
+                <span class="hour-col-count-badge ${countBadgeClass}">
+                    ${isPeak ? '<i class="fa-solid fa-fire" style="color: #10b981; font-size: 0.7rem;"></i>' : ''}
+                    ${countBadgeText}
+                </span>
+            </div>
+            <div class="hour-col-body">
+                ${count === 0 ? `
+                    <div class="hour-assoc-empty">
+                        <i class="fa-regular fa-clock" style="color: #cbd5e1; font-size: 1.35rem;"></i>
+                        <span>No support available</span>
+                    </div>
+                ` : activeAssocs.map(assoc => {
+                    let cleanName = (assoc.Associate || '').replace(/[🔴🔵🟡🧡💖💙💛🧡🎓]/gu, '').replace(/\(M\)/g, '').trim();
+                    // Clean duplicate adjacent names like "Graysi Graysi Castillo" -> "Graysi Castillo"
+                    const nameParts = cleanName.split(/\s+/);
+                    const dedupParts = [];
+                    nameParts.forEach(p => {
+                        if (dedupParts.length === 0 || dedupParts[dedupParts.length - 1].toLowerCase() !== p.toLowerCase()) {
+                            dedupParts.push(p);
+                        }
+                    });
+                    cleanName = dedupParts.join(' ');
+
+                    const jobName = assoc.JobName || 'Store Associate';
+                    const isMinor = (assoc.Minor === true || String(assoc.Minor).toLowerCase() === 'yes' || (assoc.Associate && assoc.Associate.includes('(M)')));
+                    const notes = assoc.Notes ? String(assoc.Notes).trim() : '';
+
+                    return `
+                        <div class="hour-assoc-item">
+                            <div class="hour-assoc-top">
+                                <span class="hour-assoc-name" title="${cleanName}">${cleanName}</span>
+                                ${isMinor ? '<span class="hour-assoc-minor-badge">MINOR</span>' : ''}
+                            </div>
+                            <div>
+                                <span class="hour-assoc-dept" title="${jobName}">${jobName}</span>
+                            </div>
+                            <div class="hour-assoc-meta">
+                                <span class="hour-assoc-shift">
+                                    <i class="fa-regular fa-clock" style="color: #94a3b8; font-size: 0.65rem;"></i>
+                                    ${assoc.Shift}
+                                </span>
+                                ${notes ? `<span style="color: #0284c7; font-size: 0.7rem; font-weight: 500;" title="${notes}"><i class="fa-solid fa-tag"></i></span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+
+        grid.appendChild(colCard);
+    });
+}
+
+function renderSupportTimeline() {
+    // Render Hour Columns View
+    renderSupportHourCards();
+
+    // Also render Matrix Table View
+    const table = document.getElementById('supportTimelineTable');
+    const theadRow = document.getElementById('timelineHeadRow');
+    const tbody = document.getElementById('supportTimelineBody');
+    const tfoot = document.getElementById('supportTimelineFoot');
+
+    if (!table || !theadRow || !tbody || !tfoot) return;
+
+    // Build timeline hours from 4 AM (4) to 9 PM (21)
+    const hours = [];
+    for (let h = 4; h <= 21; h++) {
+        let lblH = h <= 12 ? h : h - 12;
+        let lblAmpm = h < 12 ? 'AM' : 'PM';
+        hours.push({
+            hour: h,
+            label: `${lblH} ${lblAmpm}`
+        });
+    }
+
+    // Set Header
+    theadRow.innerHTML = `
+        <th class="col-assoc">Associate & Home Dept</th>
+        <th class="col-shift">Shift Time</th>
+        ${hours.map(h => `<th style="min-width: 44px; padding: 0.5rem 0.2rem;">${h.label}</th>`).join('')}
+    `;
+
+    if (!support_df || support_df.length === 0) {
+        tbody.innerHTML = `
+            <tr class="empty-state">
+                <td colspan="${hours.length + 2}" style="text-align: center; padding: 2.5rem; color: #64748b;">
+                    <i class="fa-solid fa-handshake-slash fa-2x" style="margin-bottom: 0.75rem; color: #94a3b8; display: block;"></i>
+                    <p style="font-weight: 500; font-size: 0.95rem;">No store support associates scheduled for today</p>
+                    <p style="font-size: 0.82rem; color: #94a3b8; margin-top: 0.25rem;">Upload a whole store schedule CSV or mark associates as "Yes" in the Store Directory</p>
+                </td>
+            </tr>
+        `;
+        tfoot.innerHTML = '';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    const hourlyTotals = {};
+    hours.forEach(h => { hourlyTotals[h.hour] = 0; });
+
+    support_df.forEach(assoc => {
+        let sm = 0, em = 0;
+        if (assoc.StartDt && assoc.EndDt) {
+            let sd = new Date(assoc.StartDt);
+            let ed = new Date(assoc.EndDt);
+            sm = sd.getHours() * 60 + sd.getMinutes();
+            em = ed.getHours() * 60 + ed.getMinutes();
+            if (em < sm) em += 24 * 60;
+        }
+
+        const tr = document.createElement('tr');
+        
+        let hourCellsHtml = '';
+        hours.forEach(h => {
+            const hStart = h.hour * 60;
+            const hEnd = (h.hour + 1) * 60;
+            const isActive = (sm < hEnd && em > hStart);
+            if (isActive) hourlyTotals[h.hour]++;
+
+            hourCellsHtml += `
+                <td>
+                    <div class="hour-block ${isActive ? 'active-hour' : ''}" title="${assoc.Associate}: ${h.label} ${isActive ? 'Available' : 'Off'}">
+                        ${isActive ? '<i class="fa-solid fa-check" style="font-size: 0.65rem;"></i>' : ''}
+                    </div>
+                </td>
+            `;
+        });
+
+        const cleanJob = assoc.JobName || 'Store Associate';
+        tr.innerHTML = `
+            <td class="col-assoc">
+                <div style="font-weight: 600; color: var(--wm-blue-dark);">${assoc.Associate}</div>
+                <div class="dept-tag" title="${cleanJob}">${cleanJob}</div>
+            </td>
+            <td class="col-shift">
+                <span class="badge" style="background: #e2e8f0; color: #334155; font-size: 0.78rem;">${assoc.Shift}</span>
+            </td>
+            ${hourCellsHtml}
+        `;
+        tbody.appendChild(tr);
+    });
+
+    // Footer summary row
+    tfoot.innerHTML = `
+        <tr class="timeline-summary-row">
+            <td colspan="2" style="text-align: right; padding-right: 1rem;">Total Support Available:</td>
+            ${hours.map(h => {
+                const count = hourlyTotals[h.hour] || 0;
+                return `<td><span class="timeline-count-badge ${count === 0 ? 'zero' : ''}">${count}</span></td>`;
+            }).join('')}
+        </tr>
+    `;
+}
+
+
+
+async function loadSupportDatabase() {
+    const tbody = document.getElementById('supportDbBody');
+    if (!tbody) return;
+
+    try {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" style="text-align:center; padding: 2rem;">
+                    <i class="fa-solid fa-spinner fa-spin fa-2x"></i>
+                    <p>Loading store support database...</p>
+                </td>
+            </tr>
+        `;
+
+        const storeParam = currentStore ? `?store=${encodeURIComponent(currentStore)}` : '';
+        const res = await fetch(`${API_BASE}/support_associates${storeParam}`);
+        if (!res.ok) throw new Error('Failed to fetch support database');
+
+        const data = await res.json();
+        support_associates_db = data.support_associates || [];
+
+        const totalBadge = document.getElementById('totalStoreCountBadge');
+        if (totalBadge) totalBadge.textContent = support_associates_db.length;
+
+        const subtext = document.getElementById('supportSheetSubtext');
+        if (subtext && data.support_store) {
+            subtext.textContent = `Cross-trained store associates in "${data.support_store}" available to support OPD`;
+        }
+        
+        const openSheetBtn = document.getElementById('openSupportSheetBtn');
+        if (openSheetBtn && data.sheet_url) {
+            openSheetBtn.href = data.sheet_url;
+        }
+
+        renderSupportDbTable();
+        updateSupportBanners();
+
+    } catch (e) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" style="text-align:center; padding: 2rem; color: #ef4444;">
+                    <i class="fa-solid fa-circle-exclamation fa-2x"></i>
+                    <p>Error loading store support database: ${e.message}</p>
+                </td>
+            </tr>
+        `;
+    }
+}
+
+function renderSupportDbTable() {
+    const tbody = document.getElementById('supportDbBody');
+    if (!tbody) return;
+
+    if (!support_associates_db || support_associates_db.length === 0) {
+        tbody.innerHTML = `
+            <tr class="empty-state">
+                <td colspan="7" style="text-align:center; padding: 2rem;">
+                    <i class="fa-solid fa-users fa-2x" style="color: #94a3b8; margin-bottom: 0.5rem;"></i>
+                    <p>No store associates in database. Click "Sync Associates From CSV" to import.</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = '';
+    support_associates_db.forEach((assoc, idx) => {
+        const tr = document.createElement('tr');
+        tr.className = 'support-db-row';
+        tr.dataset.idx = idx;
+
+        const rawSupp = String(assoc['Store Support'] || assoc.StoreSupport || '').trim().toLowerCase();
+        const isSupport = (rawSupp === 'yes' || rawSupp === 'true' || rawSupp === '1');
+        const rawMinor = String(assoc['Minor Status'] || assoc.MinorStatus || '').trim().toLowerCase();
+        const isMinor = (rawMinor === 'yes');
+
+        tr.innerHTML = `
+            <td style="text-align: center;"><input type="checkbox" class="support-select-checkbox" data-idx="${idx}"></td>
+            <td><input type="text" class="support-db-name db-input" value="${assoc.Name || ''}" style="width: 100%;"></td>
+            <td><input type="text" class="support-db-userid db-input" value="${assoc['User ID'] || assoc.UserId || ''}" style="width: 100px;"></td>
+            <td><input type="text" class="support-db-job db-input" value="${assoc['Job Name'] || assoc.JobName || ''}" style="width: 100%;"></td>
+            <td>
+                <select class="support-db-status db-input" style="font-weight: 600; color: ${isSupport ? '#15803d' : '#64748b'};">
+                    <option value="Yes" ${isSupport ? 'selected' : ''}>✅ Yes (Support)</option>
+                    <option value="No" ${!isSupport ? 'selected' : ''}>❌ No</option>
+                </select>
+            </td>
+            <td>
+                <select class="support-db-minor db-input" style="width: 70px;">
+                    <option value="No" ${!isMinor ? 'selected' : ''}>No</option>
+                    <option value="Yes" ${isMinor ? 'selected' : ''}>Yes</option>
+                </select>
+            </td>
+            <td><input type="text" class="support-db-notes db-input" value="${assoc.Notes || ''}" placeholder="e.g. Dispense only" style="width: 100%;"></td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    // Add change listeners to status dropdowns for color feedback
+    document.querySelectorAll('.support-db-status').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+            const isYes = e.target.value === 'Yes';
+            e.target.style.color = isYes ? '#15803d' : '#64748b';
+        });
+    });
+
+    filterSupportDbTable();
+}
+
+function filterSupportDbTable() {
+    const searchInput = document.getElementById('supportDbSearchInput');
+    const filterSelect = document.getElementById('supportFilterSelect');
+    if (!searchInput || !filterSelect) return;
+
+    const query = searchInput.value.toLowerCase().trim();
+    const filter = filterSelect.value;
+    const rows = document.querySelectorAll('.support-db-row');
+
+    rows.forEach(tr => {
+        const name = tr.querySelector('.support-db-name')?.value.toLowerCase() || '';
+        const userId = tr.querySelector('.support-db-userid')?.value.toLowerCase() || '';
+        const job = tr.querySelector('.support-db-job')?.value.toLowerCase() || '';
+        const status = tr.querySelector('.support-db-status')?.value || 'No';
+
+        const matchesQuery = name.includes(query) || userId.includes(query) || job.includes(query);
+        let matchesFilter = true;
+        if (filter === 'yes') matchesFilter = (status === 'Yes');
+        if (filter === 'no') matchesFilter = (status === 'No');
+
+        tr.style.display = (matchesQuery && matchesFilter) ? '' : 'none';
+    });
+}
+
+// Save Support DB
+const saveSupportBatchBtn = document.getElementById('saveSupportBatchBtn');
+if (saveSupportBatchBtn) {
+    saveSupportBatchBtn.addEventListener('click', async () => {
+        const rows = document.querySelectorAll('.support-db-row');
+        const updatedList = [];
+
+        rows.forEach(tr => {
+            updatedList.push({
+                "Name": tr.querySelector('.support-db-name')?.value.trim() || '',
+                "User ID": tr.querySelector('.support-db-userid')?.value.trim() || '',
+                "Job Name": tr.querySelector('.support-db-job')?.value.trim() || '',
+                "Store Support": tr.querySelector('.support-db-status')?.value || 'No',
+                "Minor Status": tr.querySelector('.support-db-minor')?.value || 'No',
+                "Notes": tr.querySelector('.support-db-notes')?.value.trim() || ''
+            });
+        });
+
+        const originalText = saveSupportBatchBtn.innerHTML;
+        try {
+            saveSupportBatchBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            saveSupportBatchBtn.disabled = true;
+
+            const res = await fetch(`${API_BASE}/support_associates/batch_update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ associates: updatedList, store: currentStore })
+            });
+
+            if (!res.ok) throw new Error('Failed to save changes');
+            await loadSupportDatabase();
+            alert("Store support database saved successfully!");
+        } catch (e) {
+            alert("Error saving support changes: " + e.message);
+        } finally {
+            saveSupportBatchBtn.innerHTML = originalText;
+            saveSupportBatchBtn.disabled = false;
+        }
+    });
+}
+
+// Sync Support From CSV
+const syncSupportFromCsvBtn = document.getElementById('syncSupportFromCsvBtn');
+if (syncSupportFromCsvBtn) {
+    syncSupportFromCsvBtn.addEventListener('click', async () => {
+        if (!all_store_associates_from_file || all_store_associates_from_file.length === 0) {
+            alert("No schedule uploaded yet. Please upload a whole store schedule CSV first!");
+            return;
+        }
+
+        const originalText = syncSupportFromCsvBtn.innerHTML;
+        try {
+            syncSupportFromCsvBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Syncing...';
+            syncSupportFromCsvBtn.disabled = true;
+
+            const res = await fetch(`${API_BASE}/support_associates/sync_from_csv`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ store_associates: all_store_associates_from_file, store: currentStore })
+            });
+
+            if (!res.ok) throw new Error('Sync failed');
+            const result = await res.json();
+            alert(`Sync complete! Added ${result.new_added || 0} new associates. Total in directory: ${result.total || 0}`);
+            await loadSupportDatabase();
+        } catch (e) {
+            alert("Error syncing: " + e.message);
+        } finally {
+            syncSupportFromCsvBtn.innerHTML = originalText;
+            syncSupportFromCsvBtn.disabled = false;
+        }
+    });
+}
+
+// Support search and filter event listeners
+const supportDbSearchInput = document.getElementById('supportDbSearchInput');
+if (supportDbSearchInput) supportDbSearchInput.addEventListener('input', filterSupportDbTable);
+
+const supportFilterSelect = document.getElementById('supportFilterSelect');
+if (supportFilterSelect) supportFilterSelect.addEventListener('change', filterSupportDbTable);
+
+// Select all checkbox
+const selectAllSupportCheckbox = document.getElementById('selectAllSupportCheckbox');
+if (selectAllSupportCheckbox) {
+    selectAllSupportCheckbox.addEventListener('change', (e) => {
+        document.querySelectorAll('.support-select-checkbox').forEach(cb => {
+            cb.checked = e.target.checked;
+        });
+    });
 }

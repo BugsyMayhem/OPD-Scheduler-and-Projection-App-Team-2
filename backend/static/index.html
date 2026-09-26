@@ -71,6 +71,10 @@
                     <span><i class="fa-solid fa-truck-fast" style="color: #e65100;"></i> IP/GMD</span>
                     <span id="ipgmdCount" class="badge badge-IPGMD">0</span>
                 </div>
+                <div class="stat-row">
+                    <span><i class="fa-solid fa-handshake-angle" style="color: #0284c7;"></i> Store Support</span>
+                    <span id="supportCount" class="badge badge-Support">0</span>
+                </div>
             </div>
         </aside>
 
@@ -99,23 +103,59 @@
                     Builder</button>
                 <button class="tab-btn" data-target="coverageView"><i class="fa-solid fa-chart-line"></i> Hourly
                     Coverage</button>
+                <button class="tab-btn" data-target="supportView"><i class="fa-solid fa-handshake-angle"></i> Store
+                    Support</button>
                 <button class="tab-btn" data-target="databaseView"><i class="fa-solid fa-users"></i> Associate
                     Database</button>
 
             </div>
 
-            <div id="mismatchAlert" class="alert alert-warning hidden">
-                <i class="fa-solid fa-triangle-exclamation"></i>
-                <div>
-                    <strong>Warning! Need Action</strong>
-                    <p id="mismatchText">These names were found in the PDF but not in the database: </p>
-                    <button id="quickAddBtn" class="btn btn-primary"
-                        style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.4rem 0.8rem;">
-                        <i class="fa-solid fa-user-plus"></i> Quick Add to Database
-                    </button>
+            <!-- ALERT 1: OPD Associate Database Mismatches -->
+            <div id="opdMismatchAlert" class="alert alert-warning hidden" style="margin-bottom: 0.85rem;">
+                <i class="fa-solid fa-triangle-exclamation" style="color: #d97706;"></i>
+                <div style="flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                        <span class="badge" style="background: #d97706; color: white; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; letter-spacing: 0.5px;">OPD DATABASE</span>
+                        <strong style="color: #92400e; font-size: 0.95rem;">Action Needed: Unregistered OPD / Digital Associates</strong>
+                    </div>
+                    <p id="opdMismatchText" style="font-size: 0.88rem; line-height: 1.45; color: #78350f; margin-bottom: 0.5rem;">
+                        These OPD associates were found in the schedule but are missing from your <strong>OPD Database</strong> (<span id="opdTargetDbName">1012 OPD Roster</span>): <span id="opdMismatchNames" style="font-weight: 500;"></span>
+                    </p>
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                        <button id="quickAddOpdBtn" class="btn btn-primary"
+                            style="font-size: 0.82rem; padding: 0.4rem 0.85rem; background: #d97706; border-color: #b45309;">
+                            <i class="fa-solid fa-user-plus"></i> Quick Add to OPD Database
+                        </button>
+                    </div>
                 </div>
                 <button class="close-btn"
-                    onclick="document.getElementById('mismatchAlert').classList.add('hidden')">&times;</button>
+                    onclick="document.getElementById('opdMismatchAlert').classList.add('hidden')">&times;</button>
+            </div>
+
+            <!-- ALERT 2: Total Store Database (Store Support) Mismatches -->
+            <div id="storeMismatchAlert" class="alert alert-info hidden" style="margin-bottom: 0.85rem;">
+                <i class="fa-solid fa-store" style="color: #0284c7;"></i>
+                <div style="flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                        <span class="badge" style="background: #0284c7; color: white; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; letter-spacing: 0.5px;">TOTAL STORE DATABASE</span>
+                        <strong style="color: #0369a1; font-size: 0.95rem;">Action Needed: Unregistered Store Associates</strong>
+                    </div>
+                    <p id="storeMismatchText" style="font-size: 0.88rem; line-height: 1.45; color: #075985; margin-bottom: 0.5rem;">
+                        These associates from other departments were found in the schedule but are not yet registered in your <strong>Total Store Database</strong> (<span id="storeTargetDbName">1012 Store Support</span>): <span id="storeMismatchNames" style="font-weight: 500;"></span>
+                    </p>
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                        <button id="quickAddStoreBtn" class="btn btn-primary"
+                            style="font-size: 0.82rem; padding: 0.4rem 0.85rem; background: #0284c7; border-color: #0369a1;">
+                            <i class="fa-solid fa-address-book"></i> Quick Add to Total Store Database
+                        </button>
+                        <button id="viewStoreDbFromAlertBtn" class="btn btn-outline"
+                            style="font-size: 0.82rem; padding: 0.4rem 0.85rem; border-color: #0284c7; color: #0284c7; background: white;">
+                            <i class="fa-solid fa-arrow-right"></i> Open Store Directory
+                        </button>
+                    </div>
+                </div>
+                <button class="close-btn"
+                    onclick="document.getElementById('storeMismatchAlert').classList.add('hidden')">&times;</button>
             </div>
 
             <!-- VIEW: Roster Builder -->
@@ -181,8 +221,187 @@
                 </div>
             </div> <!-- End Coverage View -->
 
+            <!-- VIEW: Store Support -->
+            <div id="supportView" class="view-section hidden">
+                <div class="roster-container glass-panel">
+                    <!-- Header with Subtabs & Actions -->
+                    <div class="table-header" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                        <div>
+                            <h2><i class="fa-solid fa-handshake-angle" style="color: #0284c7;"></i> Store Support Coverage</h2>
+                            <p id="supportSheetSubtext" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">
+                                Cross-trained store associates available to support OPD
+                            </p>
+                        </div>
+                        
+                        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                            <div class="support-subtabs">
+                                <button class="support-subtab-btn active" id="subtabTodaySupport" data-sub="today">
+                                    <i class="fa-solid fa-calendar-check"></i> Today's Support (<span id="todaySupportCountBadge">0</span>)
+                                </button>
+                                <button class="support-subtab-btn" id="subtabSupportDb" data-sub="db">
+                                    <i class="fa-solid fa-users-gear"></i> Store Directory (<span id="totalStoreCountBadge">0</span>)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
 
+                    <!-- SUBVIEW 1: Today's Scheduled Support & Hourly Timeline -->
+                    <div id="todaySupportSection">
+                        <!-- Stats Cards Banner -->
+                        <div class="support-stats-banner">
+                            <div class="support-stat-card">
+                                <div class="support-stat-icon">
+                                    <i class="fa-solid fa-users"></i>
+                                </div>
+                                <div class="support-stat-info">
+                                    <h4>Support Associates Today</h4>
+                                    <div class="stat-val" id="bannerSupportCount">0</div>
+                                </div>
+                            </div>
+                            <div class="support-stat-card">
+                                <div class="support-stat-icon" style="background: #ecfdf5; color: #10b981;">
+                                    <i class="fa-solid fa-clock"></i>
+                                </div>
+                                <div class="support-stat-info">
+                                    <h4>Total Support Hours</h4>
+                                    <div class="stat-val" id="bannerSupportHours">0 hrs</div>
+                                </div>
+                            </div>
+                            <div class="support-stat-card">
+                                <div class="support-stat-icon" style="background: #fef3c7; color: #f59e0b;">
+                                    <i class="fa-solid fa-star"></i>
+                                </div>
+                                <div class="support-stat-info">
+                                    <h4>Cross-Trained Pool</h4>
+                                    <div class="stat-val" id="bannerSupportPool">0 Active</div>
+                                </div>
+                            </div>
+                        </div>
 
+                        <!-- Hourly Availability Timeline / Cards -->
+                        <div class="timeline-card">
+                            <div class="timeline-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+                                <div>
+                                    <h3 style="font-size: 1.05rem; color: var(--wm-blue-dark); display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                                        <i class="fa-solid fa-clock-rotate-left" style="color: #0071ce;"></i> Hourly Support Availability
+                                    </h3>
+                                    <p style="font-size: 0.8rem; color: #64748b; margin: 0.2rem 0 0 0;">
+                                        Quickly identify which cross-trained associates are on the schedule for each hour
+                                    </p>
+                                </div>
+                                
+                                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                                    <!-- Search / Filter in Hourly View -->
+                                    <div class="search-box" style="margin: 0; min-width: 220px;">
+                                        <i class="fa-solid fa-magnifying-glass"></i>
+                                        <input type="text" id="supportHourlySearchInput" placeholder="Filter by name or dept..." style="padding: 0.4rem 0.6rem 0.4rem 2rem; font-size: 0.82rem; height: 34px;">
+                                    </div>
+
+                                    <!-- View Toggle: Hour Cards vs Matrix Table -->
+                                    <div class="hourly-view-toggle">
+                                        <button class="hourly-toggle-btn active" id="btnViewHourCards" data-view="cards" title="View associates grouped by hour in columns">
+                                            <i class="fa-solid fa-table-columns"></i> Hour Columns
+                                        </button>
+                                        <button class="hourly-toggle-btn" id="btnViewMatrix" data-view="matrix" title="View traditional grid timeline matrix">
+                                            <i class="fa-solid fa-table-cells"></i> Matrix Table
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- VIEW 1: Hour-by-Hour Columns / Cards (Default) -->
+                            <div id="supportHourCardsContainer" class="hour-columns-scroll">
+                                <div id="supportHourCardsGrid" class="hour-columns-grid">
+                                    <!-- Dynamically populated with hour column cards -->
+                                </div>
+                            </div>
+
+                            <!-- VIEW 2: Traditional Matrix Table -->
+                            <div id="supportMatrixContainer" class="timeline-scroll hidden">
+                                <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
+                                    <span style="font-size: 0.8rem; color: #64748b;">
+                                        <span style="display: inline-block; width: 12px; height: 12px; background: #0071ce; border-radius: 3px; vertical-align: middle; margin-right: 4px;"></span> On Clock / Available
+                                    </span>
+                                </div>
+                                <table class="timeline-table" id="supportTimelineTable">
+                                    <thead>
+                                        <tr id="timelineHeadRow">
+                                            <th class="col-assoc">Associate & Home Dept</th>
+                                            <th class="col-shift">Shift Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="supportTimelineBody">
+                                        <tr class="empty-state">
+                                            <td colspan="20" style="text-align: center; padding: 2rem; color: #64748b;">
+                                                <i class="fa-solid fa-calendar-xmark fa-2x" style="margin-bottom: 0.5rem; color: #94a3b8; display: block;"></i>
+                                                <p>Upload a store schedule CSV to view today's available support</p>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                    <tfoot id="supportTimelineFoot">
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SUBVIEW 2: Store Associates Database Directory (Google Sheet) -->
+                    <div id="supportDbSection" class="hidden">
+                        <div class="support-db-toolbar">
+                            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                                <div class="search-box" style="position: relative;">
+                                    <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #888;"></i>
+                                    <input type="text" id="supportDbSearchInput" placeholder="Search by name, ID, or job..." 
+                                        style="padding: 0.4rem 0.8rem 0.4rem 2.2rem; border-radius: 6px; border: 1px solid var(--border-color, #ccc); font-size: 0.85rem; width: 240px; outline: none; background: var(--bg-card, #fff);">
+                                </div>
+                                <select id="supportFilterSelect" style="padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #ccc; font-size: 0.85rem; background: #fff;">
+                                    <option value="all">All Store Associates</option>
+                                    <option value="yes">Can Support Only (Yes)</option>
+                                    <option value="no">Not Marked (No)</option>
+                                </select>
+                            </div>
+
+                            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                                <button id="saveSupportBatchBtn" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.4rem 0.8rem; background-color: #10b981; border-color: #10b981;">
+                                    <i class="fa-solid fa-floppy-disk"></i> Save Support Changes
+                                </button>
+                                <button id="syncSupportFromCsvBtn" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.4rem 0.8rem; background-color: #0284c7; border-color: #0284c7;">
+                                    <i class="fa-solid fa-cloud-arrow-down"></i> Sync Associates From CSV
+                                </button>
+                                <a id="openSupportSheetBtn" href="https://docs.google.com/spreadsheets/d/1IwnNimOKM_COtfict4eHbeWjgsRXXN-e2m-DGn-ywH4/edit" target="_blank" class="btn btn-outline" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Google Sheet
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table id="supportDbTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllSupportCheckbox"></th>
+                                        <th>Name</th>
+                                        <th>User ID</th>
+                                        <th>Home Job / Department</th>
+                                        <th style="min-width: 140px;">Store Support</th>
+                                        <th>Minor</th>
+                                        <th>Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="supportDbBody">
+                                    <tr class="empty-state">
+                                        <td colspan="7">
+                                            <div class="empty-content">
+                                                <i class="fa-solid fa-spinner fa-spin fa-2x"></i>
+                                                <p>Loading store support database...</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div> <!-- End Store Support View -->
 
             <!-- VIEW: Associate Database -->
             <div id="databaseView" class="view-section hidden">

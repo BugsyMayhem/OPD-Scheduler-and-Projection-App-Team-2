@@ -53,15 +53,27 @@ def format_display_name(raw_name, is_minor=False):
     if "," in s:
         parts = s.split(",", 1)
         s = f"{parts[1].strip()} {parts[0].strip()}"
-    tokens = [t for t in re.sub(r'[^a-zA-Z\s]', ' ', s).split() if t]
-    if not tokens:
+    raw_tokens = [t for t in re.sub(r'[^a-zA-Z\s]', ' ', s).split() if t]
+    if not raw_tokens:
         return raw_name
+    # Remove adjacent duplicate words (e.g., "Graysi Graysi Castillo" -> "Graysi Castillo")
+    tokens = []
+    for t in raw_tokens:
+        if not tokens or tokens[-1].lower() != t.lower():
+            tokens.append(t)
     fmt = " ".join([t.title() for t in tokens])
     return f"(M) {fmt}" if is_minor else fmt
 
 def build_associates_lookup(df_associates):
-    active_associates = df_associates[df_associates['Exclude'].astype(str).str.lower() != 'yes']
-    excluded_names = df_associates[df_associates['Exclude'].astype(str).str.lower() == 'yes']['Name'].dropna().tolist()
+    if df_associates is None or df_associates.empty or 'Name' not in df_associates.columns:
+        return [], []
+    has_exclude = 'Exclude' in df_associates.columns
+    if has_exclude:
+        active_associates = df_associates[df_associates['Exclude'].astype(str).str.lower() != 'yes']
+        excluded_names = df_associates[df_associates['Exclude'].astype(str).str.lower() == 'yes']['Name'].dropna().tolist()
+    else:
+        active_associates = df_associates
+        excluded_names = []
     excluded_normalized = [normalize_name_for_match(n) for n in excluded_names if n]
 
     v_list = []
@@ -159,9 +171,91 @@ def parse_shift_times(shift_str, start_val=None, end_val=None):
         }
     return None
 
-def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
+def build_support_lookup(df_support):
+    if df_support is None or df_support.empty:
+        return {}, []
+    
+    df_clean = df_support.copy()
+    df_clean.columns = [str(c).strip() for c in df_clean.columns]
+    
+    support_dict = {}
+    support_list = []
+    
+    for _, row in df_clean.iterrows():
+        name = str(row.get('Name', '')).strip()
+        if not name or name.lower() == 'nan':
+            continue
+        user_id = str(row.get('User ID', '')).strip()
+        if user_id.lower() in ('nan', 'none'):
+            user_id = ''
+        job_name = str(row.get('Job Name', '')).strip()
+        if job_name.lower() in ('nan', 'none'):
+            job_name = ''
+            
+        raw_supp = str(row.get('Store Support', '')).strip().lower()
+        can_support = raw_supp in ('yes', 'true', '1', 'y')
+        is_minor = str(row.get('Minor Status', '')).strip().lower() == 'yes'
+        notes = str(row.get('Notes', '')).strip()
+        if notes.lower() in ('nan', 'none'):
+            notes = ''
+            
+        entry = {
+            "name": name,
+            "norm_name": normalize_name_for_match(name),
+            "tokens": set(normalize_name_for_match(name).split()),
+            "user_id": user_id,
+            "job_name": job_name,
+            "can_support": can_support,
+            "is_minor": is_minor,
+            "notes": notes
+        }
+        support_list.append(entry)
+        if user_id:
+            support_dict[user_id.lower()] = entry
+            
+    return support_dict, support_list
+
+def match_support_associate(raw_name, user_id, support_dict, support_list):
+    if user_id and user_id.lower() in support_dict:
+        return support_dict[user_id.lower()]
+        
+    norm_name = normalize_name_for_match(raw_name)
+    if not norm_name:
+        return None
+        
+    for entry in support_list:
+        if entry["norm_name"] == norm_name:
+            return entry
+            
+    for entry in support_list:
+        if entry["norm_name"] in norm_name or norm_name in entry["norm_name"]:
+            return entry
+            
+    target_tokens = set(norm_name.split())
+    if len(target_tokens) >= 2:
+        for entry in support_list:
+            if len(entry["tokens"]) >= 2 and (entry["tokens"].issubset(target_tokens) or target_tokens.issubset(entry["tokens"])):
+                return entry
+                
+    return None
+
+def is_opd_job(job_title):
+    if not job_title:
+        return False
+    j = str(job_title).lower()
+    return any(k in j for k in ["digital", "personal shopper", "opd", "ogp", "ecommerce", "e-commerce", "picker", "dispense"])
+
+def process_csv(file_bytes_or_buffer, df_associates, df_support=None, is_excel=False):
     v_list, excluded_normalized = build_associates_lookup(df_associates)
-    data, mismatches = [], []
+    support_dict, support_list = build_support_lookup(df_support)
+    data, opd_mismatches, store_mismatches = [], [], []
+    support_roster, store_associates = [], []
+    
+    seen_opd_shifts = set()
+    seen_supp_shifts = set()
+    seen_store_mismatches = set()
+    seen_opd_mismatches = set()
+    seen_store_associates = set()
 
     if is_excel:
         df = pd.read_excel(file_bytes_or_buffer)
@@ -175,7 +269,7 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
             df = pd.read_csv(file_bytes_or_buffer, encoding='latin1')
 
     if df.empty:
-        return data, mismatches
+        return data, opd_mismatches, store_mismatches, support_roster, store_associates
 
     # Clean headers
     df.columns = [str(c).strip() for c in df.columns]
@@ -217,7 +311,7 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
             end_col = col_map[alias]
             break
 
-    for alias in ["role", "job", "jobcode", "jobdescription", "dept", "department", "position", "title"]:
+    for alias in ["jobname", "job", "jobcode", "jobdescription", "dept", "department", "position", "title", "role"]:
         if alias in col_map:
             role_col = col_map[alias]
             break
@@ -227,6 +321,9 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
         if alias in col_map:
             user_id_col = col_map[alias]
             break
+
+    # Determine if file has an explicit job/department column
+    has_role_col = role_col is not None and df[role_col].dropna().astype(str).str.strip().ne("").any()
 
     for _, row in df.iterrows():
         raw_name = str(row.get(name_col, '')).strip()
@@ -248,32 +345,120 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
         if not parsed_shift:
             continue
 
-        match_entry, is_excluded = match_associate(raw_name, v_list, excluded_normalized)
-        if is_excluded:
-            continue
-
         user_id_val = str(row.get(user_id_col, '')).strip() if user_id_col else ""
         if user_id_val and user_id_val.lower() in ("nan", "none", "-", ""):
             user_id_val = ""
 
+        job_val = str(row.get(role_col, '')).strip() if role_col else ""
+        if job_val.lower() in ("nan", "none", "-"):
+            job_val = ""
+
+        norm_raw_name = normalize_name_for_match(raw_name)
+        assoc_unique_key = user_id_val.lower() if user_id_val else norm_raw_name
+
+        # Step 1: Check match against OPD associate database
+        match_entry, is_excluded = match_associate(raw_name, v_list, excluded_normalized)
+        if is_excluded:
+            continue
+
         if match_entry:
+            # Matched active OPD associate
+            shift_dedup_key = (assoc_unique_key, parsed_shift["shift_label"])
+            if shift_dedup_key in seen_opd_shifts:
+                continue
+            seen_opd_shifts.add(shift_dedup_key)
+
             best_name = raw_name if (len(raw_name) > len(match_entry["raw"]) and len(raw_name.split()) >= len(match_entry["raw"].split())) else match_entry["raw"]
             disp_name = format_display_name(best_name, match_entry["is_minor"])
             assigned_role = match_entry["role"]
+
+            if user_id_val:
+                disp_name = f"{disp_name} ({user_id_val})"
+
+            data.append({
+                "Associate": disp_name,
+                "Role": assigned_role,
+                "Shift": parsed_shift["shift_label"],
+                "Break 1": "Pending...",
+                "Lunch Time": "Pending...",
+                "Break 2": "Pending...",
+                "StartDt": parsed_shift["st_dt"].isoformat(),
+                "EndDt": parsed_shift["end_dt"].isoformat(),
+                "Duration": parsed_shift["duration"]
+            })
+            continue
+
+        # Step 2: Associate was NOT matched in OPD database.
+        # Check whether this person belongs to Store (Non-OPD) or is an unlisted OPD associate.
+        is_store_associate = has_role_col and not is_opd_job(job_val)
+
+        if is_store_associate:
+            # Store associate! Match against Store Support DB
+            supp_entry = match_support_associate(raw_name, user_id_val, support_dict, support_list)
+            
+            clean_name = format_display_name(raw_name, is_minor=(supp_entry["is_minor"] if supp_entry else False))
+            
+            # If not in Store Support DB, flag as needing action for Total Store Database!
+            if not supp_entry:
+                if assoc_unique_key not in seen_store_mismatches:
+                    seen_store_mismatches.add(assoc_unique_key)
+                    store_mismatches.append({
+                        "name": clean_name,
+                        "user_id": user_id_val,
+                        "job": job_val or "Store Associate"
+                    })
+
+            # If marked Store Support == Yes, include in daily support roster
+            if supp_entry and supp_entry["can_support"]:
+                supp_shift_key = (assoc_unique_key, parsed_shift["shift_label"])
+                if supp_shift_key not in seen_supp_shifts:
+                    seen_supp_shifts.add(supp_shift_key)
+                    disp_supp_name = clean_name
+                    if user_id_val:
+                        disp_supp_name = f"{disp_supp_name} ({user_id_val})"
+                        
+                    support_roster.append({
+                        "Associate": disp_supp_name,
+                        "Name": supp_entry["name"] or clean_name,
+                        "UserId": user_id_val or supp_entry["user_id"],
+                        "JobName": job_val or supp_entry["job_name"],
+                        "Shift": parsed_shift["shift_label"],
+                        "StartDt": parsed_shift["st_dt"].isoformat(),
+                        "EndDt": parsed_shift["end_dt"].isoformat(),
+                        "Duration": parsed_shift["duration"],
+                        "IsMinor": supp_entry["is_minor"],
+                        "Notes": supp_entry["notes"]
+                    })
+
+            if assoc_unique_key not in seen_store_associates:
+                seen_store_associates.add(assoc_unique_key)
+                store_associates.append({
+                    "Name": supp_entry["name"] if supp_entry else clean_name,
+                    "UserId": user_id_val or (supp_entry["user_id"] if supp_entry else ""),
+                    "JobName": job_val or (supp_entry["job_name"] if supp_entry else ""),
+                    "StoreSupport": "Yes" if (supp_entry and supp_entry["can_support"]) else "No",
+                    "MinorStatus": "Yes" if (supp_entry and supp_entry["is_minor"]) else "No",
+                    "Notes": supp_entry["notes"] if supp_entry else ""
+                })
+            continue
+
+        # Step 3: Unlisted OPD associate (or file with no department column, treated as OPD)
+        disp_name = format_display_name(raw_name, is_minor=False)
+        csv_role = job_val.lower()
+        if "picker" in csv_role:
+            assigned_role = "Pickers"
+        elif "backroom" in csv_role or "dispense" in csv_role:
+            assigned_role = "Backroom"
+        elif "exception" in csv_role:
+            assigned_role = "Exceptions"
+        elif "ip" in csv_role or "gmd" in csv_role or "in home" in csv_role or "delivery" in csv_role:
+            assigned_role = "IP/GMD"
         else:
-            disp_name = format_display_name(raw_name, is_minor=False)
-            csv_role = str(row.get(role_col, '')).strip().lower() if role_col else ""
-            if "picker" in csv_role:
-                assigned_role = "Pickers"
-            elif "backroom" in csv_role or "dispense" in csv_role:
-                assigned_role = "Backroom"
-            elif "exception" in csv_role:
-                assigned_role = "Exceptions"
-            elif "ip" in csv_role or "gmd" in csv_role or "in home" in csv_role or "delivery" in csv_role:
-                assigned_role = "IP/GMD"
-            else:
-                assigned_role = "Pickers"
-            mismatches.append({
+            assigned_role = "Pickers"
+
+        if assoc_unique_key not in seen_opd_mismatches:
+            seen_opd_mismatches.add(assoc_unique_key)
+            opd_mismatches.append({
                 "name": disp_name,
                 "user_id": user_id_val,
                 "role": assigned_role
@@ -282,27 +467,49 @@ def process_csv(file_bytes_or_buffer, df_associates, is_excel=False):
         if user_id_val:
             disp_name = f"{disp_name} ({user_id_val})"
 
-        data.append({
-            "Associate": disp_name,
-            "Role": assigned_role,
-            "Shift": parsed_shift["shift_label"],
-            "Break 1": "Pending...",
-            "Lunch Time": "Pending...",
-            "Break 2": "Pending...",
-            "StartDt": parsed_shift["st_dt"].isoformat(),
-            "EndDt": parsed_shift["end_dt"].isoformat(),
-            "Duration": parsed_shift["duration"]
-        })
+        shift_dedup_key = (assoc_unique_key, parsed_shift["shift_label"])
+        if shift_dedup_key not in seen_opd_shifts:
+            seen_opd_shifts.add(shift_dedup_key)
+            data.append({
+                "Associate": disp_name,
+                "Role": assigned_role,
+                "Shift": parsed_shift["shift_label"],
+                "Break 1": "Pending...",
+                "Lunch Time": "Pending...",
+                "Break 2": "Pending...",
+                "StartDt": parsed_shift["st_dt"].isoformat(),
+                "EndDt": parsed_shift["end_dt"].isoformat(),
+                "Duration": parsed_shift["duration"]
+            })
 
-    seen_mismatches = set()
-    unique_mismatches = []
-    for m in mismatches:
+    seen_opd = set()
+    unique_opd_mismatches = []
+    for m in opd_mismatches:
         key = (m["name"], m.get("user_id", ""))
-        if key not in seen_mismatches:
-            seen_mismatches.add(key)
-            unique_mismatches.append(m)
+        if key not in seen_opd:
+            seen_opd.add(key)
+            unique_opd_mismatches.append(m)
 
-    return data, unique_mismatches
+    seen_store_mis = set()
+    unique_store_mismatches = []
+    for s in store_mismatches:
+        key = (s["name"], s.get("user_id", ""))
+        if key not in seen_store_mis:
+            seen_store_mis.add(key)
+            unique_store_mismatches.append(s)
+
+    seen_store = set()
+    unique_store_associates = []
+    for s in store_associates:
+        key = (s["Name"].strip().lower(), s.get("UserId", "").strip().lower())
+        if key not in seen_store:
+            seen_store.add(key)
+            unique_store_associates.append(s)
+
+    # Sort support roster by shift start time
+    support_roster.sort(key=lambda x: x["StartDt"])
+
+    return data, unique_opd_mismatches, unique_store_mismatches, support_roster, unique_store_associates
 
 def process_pdf(pdf_bytes, df_associates):
     v_list, excluded_normalized = build_associates_lookup(df_associates)
@@ -366,7 +573,7 @@ def process_pdf(pdf_bytes, df_associates):
             seen_mismatches.add(key)
             unique_mismatches.append(m)
 
-    return data, unique_mismatches
+    return data, unique_mismatches, [], []
 
 def find_best_slot(target_dt, min_dt, max_dt, slot_counter, step_minutes=15):
     """
