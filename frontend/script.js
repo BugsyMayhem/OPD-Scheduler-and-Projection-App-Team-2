@@ -2191,6 +2191,7 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
                             availableSupport.push({
                                 id: s.UserId || `supp-${h}-${sIdx}`,
                                 name: cleanName,
+                                job: deptName,
                                 department: deptName,
                                 jobTitle: s.JobName || deptName,
                                 shift: s.Shift || ''
