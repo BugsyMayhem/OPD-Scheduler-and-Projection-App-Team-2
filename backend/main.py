@@ -498,6 +498,14 @@ def get_decision_dashboard_schedule():
         raise HTTPException(status_code=404, detail="No schedule export available yet. Upload a schedule and click Export in the Scheduler first.")
     return export_data
 
+@app.get("/api/dashboard_feed")
+def get_dashboard_feed():
+    return get_decision_dashboard_schedule()
+
+@app.post("/api/dashboard_feed")
+def post_dashboard_feed(payload: DashboardScheduleExport):
+    return save_decision_dashboard_schedule(payload)
+
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")
 
 if __name__ == "__main__":
