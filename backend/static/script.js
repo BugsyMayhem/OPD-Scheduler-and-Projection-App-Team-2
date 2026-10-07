@@ -11,6 +11,7 @@ const lastSyncTime = document.getElementById('lastSyncTime');
 const pdfUpload = document.getElementById('pdfUpload');
 const calcLunchesBtn = document.getElementById('calcLunchesBtn');
 const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+const exportDashboardBtn = document.getElementById('exportDashboardBtn');
 const rosterBody = document.getElementById('rosterBody');
 
 const opdMismatchAlert = document.getElementById('opdMismatchAlert');
@@ -544,6 +545,7 @@ pdfUpload.addEventListener('change', async (e) => {
 
         calcLunchesBtn.disabled = main_df.length === 0;
         downloadPdfBtn.disabled = (main_df.length === 0 && support_df.length === 0);
+        if (exportDashboardBtn) exportDashboardBtn.disabled = (main_df.length === 0 && support_df.length === 0);
         
         const clearPdfBtn = document.getElementById('clearPdfBtn');
         if (clearPdfBtn) clearPdfBtn.disabled = (main_df.length === 0 && support_df.length === 0);
@@ -603,6 +605,7 @@ if (clearPdfBtn) {
         // Disable buttons
         calcLunchesBtn.disabled = true;
         downloadPdfBtn.disabled = true;
+        if (exportDashboardBtn) exportDashboardBtn.disabled = true;
         clearPdfBtn.disabled = true;
         
         // Reset file input
@@ -1203,6 +1206,7 @@ downloadPdfBtn.addEventListener('click', () => {
     }
 
     doc.save(`${docTitle}.pdf`);
+    exportDecisionDashboardJson(docTitle, main_df, support_df);
 });
 
 // Hourly Coverage Logic translated from Python to JS
@@ -1466,9 +1470,11 @@ if (openManualAddBtn && manualAddModal) {
         
         const calcLunchesBtn = document.getElementById('calcLunchesBtn');
         const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+const exportDashboardBtn = document.getElementById('exportDashboardBtn');
         const clearPdfBtn = document.getElementById('clearPdfBtn');
         if (calcLunchesBtn) calcLunchesBtn.disabled = main_df.length === 0;
         if (downloadPdfBtn) downloadPdfBtn.disabled = main_df.length === 0;
+        if (exportDashboardBtn) exportDashboardBtn.disabled = main_df.length === 0;
         if (clearPdfBtn) clearPdfBtn.disabled = main_df.length === 0;
         
         manualAddModal.classList.add('hidden');
@@ -2078,4 +2084,164 @@ if (selectAllSupportCheckbox) {
             cb.checked = e.target.checked;
         });
     });
+}
+
+
+if (exportDashboardBtn) {
+    exportDashboardBtn.addEventListener('click', () => {
+        if (main_df.length === 0 && support_df.length === 0) return;
+        exportDecisionDashboardJson(uploadedPdfName, main_df, support_df);
+    });
+}
+
+
+// Export structured data for Store Fulfillment Decision Dashboard
+function exportDecisionDashboardJson(docTitle, main_df, support_df) {
+    if (!main_df || (main_df.length === 0 && (!support_df || support_df.length === 0))) {
+        alert("Please upload a roster and calculate lunches before exporting.");
+        return;
+    }
+
+    try {
+        const slots = [];
+        // 15 operational windows from 5 AM to 8 PM (hours 5 to 19)
+        for (let h = 5; h <= 19; h++) {
+            let startH = h <= 12 ? h : h - 12;
+            let startAmpm = h < 12 ? 'AM' : 'PM';
+            let endH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
+            let endAmpm = (h + 1) < 12 ? 'AM' : ((h + 1) === 24 ? 'AM' : 'PM');
+            let hourLabel = `${startH} ${startAmpm} - ${endH} ${endAmpm}`;
+
+            // 1. Calculate active scheduled pickers in this hour (accounting for lunches)
+            let pickerCount = 0;
+            let pickerNames = [];
+
+            if (Array.isArray(main_df)) {
+                main_df.forEach(r => {
+                    if (r.Role === 'Exclude' || r.Role === 'Training') return;
+                    if (!r.StartDt) return;
+                    let sd = new Date(r.StartDt);
+                    let ed = new Date(r.EndDt);
+                    let sm = sd.getHours() * 60 + sd.getMinutes();
+                    let em = ed.getHours() * 60 + ed.getMinutes();
+                    if (em < sm) em += 24 * 60;
+
+                    if (sm <= h * 60 && em >= (h + 1) * 60) {
+                        let on_l = false;
+                        if (r['Lunch Time'] && r['Lunch Time'] !== 'N/A' && r['Lunch Time'] !== 'Pending...' && r['Lunch Time'] !== 'No Slot Avail') {
+                            let lm = parseTimeToMinutes(r['Lunch Time']);
+                            if (lm !== null) {
+                                if (lm < (h + 1) * 60 && (lm + 60) > h * 60) {
+                                    on_l = true;
+                                }
+                            }
+                        }
+
+                        if (!on_l) {
+                            let act = r.Role;
+                            if (h === 4) {
+                                if (r.Role === "Backroom" || r.Role === "Exceptions" || r.Role === "IP/GMD" || r.Role === "IPGMD") act = "Pickers";
+                            } else if (h === 5) {
+                                if (r.Role === "Backroom") act = "Pickers";
+                            }
+                            if (act === "Pickers") {
+                                pickerCount++;
+                                let cleanName = (r.Associate || '')
+                                    .replace(/[🔴🔵🟡🧡💖💙💛🧡🎓]/gu, '')
+                                    .replace(/\([A-Z0-9_\-]+\)/gi, '')
+                                    .replace(/\(M\)/g, '')
+                                    .trim();
+                                if (cleanName) pickerNames.push(cleanName);
+                            }
+                        }
+                    }
+                });
+            }
+
+            // 2. Gather store support available in this hour
+            const availableSupport = [];
+            const seenSupport = new Set();
+
+            if (Array.isArray(support_df)) {
+                support_df.forEach((s, sIdx) => {
+                    if (!s.StartDt || !s.EndDt) return;
+                    let sd = new Date(s.StartDt);
+                    let ed = new Date(s.EndDt);
+                    let sm = sd.getHours() * 60 + sd.getMinutes();
+                    let em = ed.getHours() * 60 + ed.getMinutes();
+                    if (em < sm) em += 24 * 60;
+
+                    if (sm < (h + 1) * 60 && em > h * 60) {
+                        const key = (s.UserId || s.Associate || s.Name || '').toLowerCase().trim();
+                        if (key && !seenSupport.has(key)) {
+                            seenSupport.add(key);
+                            let cleanName = (s.Name || s.Associate || '')
+                                .replace(/[🔴🔵🟡🧡💖💙💛🧡🎓]/gu, '')
+                                .replace(/\([A-Z0-9_\-]+\)/gi, '')
+                                .replace(/\(M\)/g, '')
+                                .trim();
+                            const parts = cleanName.split(/\s+/).filter(Boolean);
+                            const dedup = [];
+                            parts.forEach(p => {
+                                if (dedup.length === 0 || dedup[dedup.length - 1].toLowerCase() !== p.toLowerCase()) dedup.push(p);
+                            });
+                            cleanName = dedup.join(' ').trim();
+
+                            let deptName = s.JobName || s.Job || s.Role || 'Store Support';
+                            availableSupport.push({
+                                id: s.UserId || `supp-${h}-${sIdx}`,
+                                name: cleanName,
+                                department: deptName,
+                                jobTitle: s.JobName || deptName,
+                                shift: s.Shift || ''
+                            });
+                        }
+                    }
+                });
+            }
+
+            slots.push({
+                id: `slot-${h - 4}`,
+                hourIndex: h - 5,
+                hour: hourLabel,
+                hourLabel: hourLabel,
+                scheduledPickers: pickerCount,
+                pickerNames: pickerNames,
+                availableStoreSupport: availableSupport
+            });
+        }
+
+        const storeNum = (currentStore && currentStore.match(/\d+/)) ? currentStore.match(/\d+/)[0] : "1012";
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const exportPayload = {
+            version: "1.0",
+            exportDate: new Date().toISOString(),
+            date: todayStr,
+            store: `Store ${storeNum}`,
+            storeNumber: storeNum,
+            rosterName: docTitle || uploadedPdfName || "OPD Roster",
+            slots: slots
+        };
+
+        // 1. Download file to user browser
+        const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `opd_schedule_export_${todayStr}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // 2. Also non-blocking POST to server for 1-click cloud sync
+        fetch(`${API_BASE}/decision_dashboard_schedule`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(exportPayload)
+        }).catch(err => console.log("Non-blocking backend schedule cache:", err));
+
+    } catch (err) {
+        console.error("Failed to export decision dashboard JSON:", err);
+    }
 }

@@ -474,6 +474,30 @@ def calculate_lunches(payload: RosterPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Mount static files (frontend)
+# Decision Dashboard Integration Endpoints
+db_cache["latest_schedule_export"] = None
+
+class DashboardScheduleExport(BaseModel):
+    version: Optional[str] = "1.0"
+    exportDate: Optional[str] = None
+    rosterName: Optional[str] = None
+    store: Optional[str] = "Store 1012"
+    storeNumber: Optional[str] = "1012"
+    date: Optional[str] = None
+    slots: List[Dict[str, Any]]
+
+@app.post("/api/decision_dashboard_schedule")
+def save_decision_dashboard_schedule(payload: DashboardScheduleExport):
+    db_cache["latest_schedule_export"] = payload.dict()
+    return {"status": "success", "message": "Schedule export saved for Decision Dashboard", "slots_count": len(payload.slots)}
+
+@app.get("/api/decision_dashboard_schedule")
+def get_decision_dashboard_schedule():
+    export_data = db_cache.get("latest_schedule_export")
+    if not export_data:
+        raise HTTPException(status_code=404, detail="No schedule export available yet. Upload a schedule and click Export in the Scheduler first.")
+    return export_data
+
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")
 
 if __name__ == "__main__":
