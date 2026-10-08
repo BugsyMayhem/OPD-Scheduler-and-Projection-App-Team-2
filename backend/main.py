@@ -1,5 +1,6 @@
 import re
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -477,6 +478,49 @@ def calculate_lunches(payload: RosterPayload):
 # Decision Dashboard Integration Endpoints
 db_cache["latest_schedule_export"] = None
 
+def get_dashboard_cache_worksheet(client, sheet_id: str):
+    spreadsheet = client.open_by_key(sheet_id)
+    worksheets = spreadsheet.worksheets()
+    target_title = "Dashboard Export Cache"
+    for ws in worksheets:
+        if ws.title.strip().lower() == target_title.lower():
+            return ws
+    new_ws = spreadsheet.add_worksheet(title=target_title, rows=20, cols=5)
+    new_ws.append_row(["Updated_At", "Store", "Date", "Slots_Count", "Payload_JSON"])
+    return new_ws
+
+def persist_dashboard_export_to_sheet(payload_dict: dict):
+    try:
+        client = get_gspread_client()
+        sheet_id = get_sheet_id()
+        ws = get_dashboard_cache_worksheet(client, sheet_id)
+        now_str = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M:%S %p")
+        json_str = json.dumps(payload_dict)
+        row_values = [
+            now_str,
+            str(payload_dict.get("store", "")),
+            str(payload_dict.get("date", "")),
+            len(payload_dict.get("slots", [])),
+            json_str
+        ]
+        ws.update(range_name="A2:E2", values=[row_values])
+        print("Successfully persisted dashboard schedule export to Google Sheets.")
+    except Exception as e:
+        print(f"Warning: Could not persist dashboard export to Google Sheets: {e}")
+
+def load_dashboard_export_from_sheet():
+    try:
+        client = get_gspread_client()
+        sheet_id = get_sheet_id()
+        ws = get_dashboard_cache_worksheet(client, sheet_id)
+        val = ws.cell(2, 5).value
+        if val:
+            parsed = json.loads(val)
+            return parsed
+    except Exception as e:
+        print(f"Warning: Could not load dashboard export from Google Sheets: {e}")
+    return None
+
 class DashboardScheduleExport(BaseModel):
     version: Optional[str] = "1.0"
     exportDate: Optional[str] = None
@@ -488,12 +532,18 @@ class DashboardScheduleExport(BaseModel):
 
 @app.post("/api/decision_dashboard_schedule")
 def save_decision_dashboard_schedule(payload: DashboardScheduleExport):
-    db_cache["latest_schedule_export"] = payload.dict()
+    p_dict = payload.dict()
+    db_cache["latest_schedule_export"] = p_dict
+    persist_dashboard_export_to_sheet(p_dict)
     return {"status": "success", "message": "Schedule export saved for Decision Dashboard", "slots_count": len(payload.slots)}
 
 @app.get("/api/decision_dashboard_schedule")
 def get_decision_dashboard_schedule():
     export_data = db_cache.get("latest_schedule_export")
+    if not export_data:
+        export_data = load_dashboard_export_from_sheet()
+        if export_data:
+            db_cache["latest_schedule_export"] = export_data
     if not export_data:
         raise HTTPException(status_code=404, detail="No schedule export available yet. Upload a schedule and click Export in the Scheduler first.")
     return export_data
@@ -506,6 +556,17 @@ def get_dashboard_feed():
 def post_dashboard_feed(payload: DashboardScheduleExport):
     return save_decision_dashboard_schedule(payload)
 
+# Mount Business Decision Dashboard (bundled static build)
+static_dashboard_dir = os.path.join(os.path.dirname(__file__), "static_dashboard")
+if not os.path.exists(static_dashboard_dir):
+    os.makedirs(static_dashboard_dir, exist_ok=True)
+app.mount("/dashboard", StaticFiles(directory=static_dashboard_dir, html=True), name="static_dashboard")
+
+@app.get("/dashboard")
+def redirect_to_dashboard():
+    return RedirectResponse(url="/dashboard/")
+
+# Mount OPD Scheduler frontend
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")
 
 if __name__ == "__main__":
