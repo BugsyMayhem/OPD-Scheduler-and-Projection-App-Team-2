@@ -1062,7 +1062,7 @@ downloadPdfBtn.addEventListener('click', () => {
         const timelineCounts = [];
         const hourlyDetailedRows = [];
 
-        for (let h = 4; h <= 21; h++) {
+        for (let h = 5; h <= 21; h++) {
             let lblH = h <= 12 ? h : h - 12;
             let lblAmpm = h < 12 ? 'AM' : 'PM';
             let nextH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
@@ -1282,7 +1282,7 @@ function updateCoverageTable() {
 
     coverageBody.innerHTML = '';
 
-    for (let h = 4; h < 22; h++) {
+    for (let h = 5; h < 22; h++) {
         let lblH = h <= 12 ? h : h - 12;
         let lblAmpm = h < 12 ? 'AM' : 'PM';
         let lbl = h === 12 ? "12 PM" : `${lblH} ${lblAmpm} `;
@@ -1316,10 +1316,11 @@ function updateCoverageTable() {
 
                 if (!on_l) {
                     let act = r.Role;
-                    if (h === 4) {
-                        if (r.Role === "Backroom" || r.Role === "Exceptions" || r.Role === "IP/GMD" || r.Role === "IPGMD") act = "Pickers";
-                    } else if (h === 5) {
-                        if (r.Role === "Backroom" && bCount >= 2) act = "Pickers";
+                    if (h === 5) {
+                        // 5 AM - 6 AM: All hands pick (no backroom work needed). Exceptions picker starts and is treated normal.
+                        if (r.Role === "Backroom" || r.Role === "IP/GMD" || r.Role === "IPGMD") {
+                            act = "Pickers";
+                        }
                     }
                     if (act === "Pickers") pCount++;
                     if (act === "Backroom") bCount++;
@@ -1635,9 +1636,9 @@ function renderSupportHourCards() {
         return;
     }
 
-    // Build timeline hours from 4 AM (4) to 9 PM (21)
+    // Build timeline hours from 5 AM (5) to 9 PM (21) -> spans 5 AM to 10 PM
     const hours = [];
-    for (let h = 4; h <= 21; h++) {
+    for (let h = 5; h <= 21; h++) {
         let lblH = h <= 12 ? h : h - 12;
         let lblAmpm = h < 12 ? 'AM' : 'PM';
         let nextH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
@@ -1770,9 +1771,9 @@ function renderSupportTimeline() {
 
     if (!table || !theadRow || !tbody || !tfoot) return;
 
-    // Build timeline hours from 4 AM (4) to 9 PM (21)
+    // Build timeline hours from 5 AM (5) to 9 PM (21) -> spans 5 AM to 10 PM
     const hours = [];
-    for (let h = 4; h <= 21; h++) {
+    for (let h = 5; h <= 21; h++) {
         let lblH = h <= 12 ? h : h - 12;
         let lblAmpm = h < 12 ? 'AM' : 'PM';
         hours.push({
@@ -2104,8 +2105,8 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
 
     try {
         const slots = [];
-        // 15 operational windows from 5 AM to 8 PM (hours 5 to 19)
-        for (let h = 5; h <= 19; h++) {
+        // Operational windows from 5 AM to 9 PM (hours 5 to 21, spanning 5 AM to 10 PM)
+        for (let h = 5; h <= 21; h++) {
             let startH = h <= 12 ? h : h - 12;
             let startAmpm = h < 12 ? 'AM' : 'PM';
             let endH = (h + 1) <= 12 ? (h + 1) : (h + 1) - 12;
@@ -2139,10 +2140,11 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
 
                         if (!on_l) {
                             let act = r.Role;
-                            if (h === 4) {
-                                if (r.Role === "Backroom" || r.Role === "Exceptions" || r.Role === "IP/GMD" || r.Role === "IPGMD") act = "Pickers";
-                            } else if (h === 5) {
-                                if (r.Role === "Backroom") act = "Pickers";
+                            if (h === 5) {
+                                // 5 AM - 6 AM: All hands pick (no backroom work needed). Exceptions picker starts and is treated normal.
+                                if (r.Role === "Backroom" || r.Role === "IP/GMD" || r.Role === "IPGMD") {
+                                    act = "Pickers";
+                                }
                             }
                             if (act === "Pickers") {
                                 pickerCount++;
