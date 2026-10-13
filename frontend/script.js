@@ -2116,6 +2116,7 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
             // 1. Calculate active scheduled pickers in this hour (accounting for lunches)
             let pickerCount = 0;
             let pickerNames = [];
+            let backroomStaff = [];
 
             if (Array.isArray(main_df)) {
                 main_df.forEach(r => {
@@ -2154,6 +2155,31 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
                                     .replace(/\(M\)/g, '')
                                     .trim();
                                 if (cleanName) pickerNames.push(cleanName);
+                            } else if (act === "Backroom" || act === "IP/GMD" || act === "IPGMD" || act === "Exceptions") {
+                                let cleanName = (r.Associate || '')
+                                    .replace(/[🔴🔵🟡🧡💖💙💛🧡🎓]/gu, '')
+                                    .replace(/\([A-Z0-9_\-]+\)/gi, '')
+                                    .replace(/\(M\)/g, '')
+                                    .trim();
+                                if (cleanName) {
+                                    let sHour = sd.getHours() % 12 || 12;
+                                    let sMin = sd.getMinutes() < 10 ? '0' + sd.getMinutes() : sd.getMinutes();
+                                    let sAmpm = sd.getHours() >= 12 ? 'PM' : 'AM';
+                                    let eHour = ed.getHours() % 12 || 12;
+                                    let eMin = ed.getMinutes() < 10 ? '0' + ed.getMinutes() : ed.getMinutes();
+                                    let eAmpm = ed.getHours() >= 12 ? 'PM' : 'AM';
+                                    let shiftStr = r.Shift || `${sHour}:${sMin} ${sAmpm} - ${eHour}:${eMin} ${eAmpm}`;
+                                    let displayRole = r.Role === "Backroom" ? "OPD Backroom" : r.Role;
+                                    backroomStaff.push({
+                                        id: `backroom-${cleanName.replace(/\s+/g, '-').toLowerCase()}-${h}`,
+                                        name: cleanName,
+                                        role: displayRole,
+                                        job: displayRole,
+                                        department: "OPD Backroom",
+                                        shift: shiftStr,
+                                        isBackroom: true
+                                    });
+                                }
                             }
                         }
                     }
@@ -2210,6 +2236,8 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
                 hourLabel: hourLabel,
                 scheduledPickers: pickerCount,
                 pickerNames: pickerNames,
+                availableBackroomStaff: backroomStaff,
+                backroomNames: backroomStaff,
                 availableStoreSupport: availableSupport
             });
         }
