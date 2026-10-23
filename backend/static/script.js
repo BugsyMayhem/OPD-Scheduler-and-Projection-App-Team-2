@@ -2243,14 +2243,22 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
         }
 
         const storeNum = (currentStore && currentStore.match(/\d+/)) ? currentStore.match(/\d+/)[0] : "1012";
-        const todayStr = new Date().toISOString().slice(0, 10);
+
+        // Local calendar date (NOT UTC, which flips to "tomorrow" in the evening)
+        const nowLocal = new Date();
+        const localTodayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+        // Prefer the roster's own date, e.g. "Daily Overview 2026-09-15 (Exported on 2026-09-14)" -> 2026-09-15
+        const rosterLabel = docTitle || uploadedPdfName || "OPD Roster";
+        const rosterDateMatch = String(rosterLabel).match(/(\d{4}-\d{2}-\d{2})/);
+        const todayStr = rosterDateMatch ? rosterDateMatch[1] : localTodayStr;
+
         const exportPayload = {
             version: "1.0",
             exportDate: new Date().toISOString(),
             date: todayStr,
             store: `Store ${storeNum}`,
             storeNumber: storeNum,
-            rosterName: docTitle || uploadedPdfName || "OPD Roster",
+            rosterName: rosterLabel,
             slots: slots
         };
 
@@ -2265,7 +2273,15 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        // 2. Also non-blocking POST to server for 1-click cloud sync
+        // 2. Save to Supabase immediately (primary store: never sleeps, no size limit)
+        saveScheduleToSupabase(exportPayload)
+            .then(() => showExportToast(`✓ Schedule for ${todayStr} saved to the cloud. Dashboard Sync will load it.`, true))
+            .catch(err => {
+                console.error("Supabase schedule save failed:", err);
+                showExportToast(`⚠ Cloud save failed (${err.message}). The downloaded JSON file still works for manual upload.`, false);
+            });
+
+        // 3. Legacy server cache (fallback only; Render memory is wiped whenever the server sleeps)
         fetch(`${API_BASE}/decision_dashboard_schedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2276,3 +2292,44 @@ function exportDecisionDashboardJson(docTitle, main_df, support_df) {
         console.error("Failed to export decision dashboard JSON:", err);
     }
 }
+
+// Supabase connection (public anon key; same project the Decision Dashboard uses)
+const OPD_SUPABASE_URL = 'https://kedrioyxqpdzrwnymhyv.supabase.co';
+const OPD_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtlZHJpb3l4cXBkenJ3bnltaHl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0NDM4NzAsImV4cCI6MjEwNzAxOTg3MH0.oj8T43DPezPmGQvOg2m-UNECrICjw1zCmNZhHD6pQdU';
+
+// Upsert the latest exported schedule (one row per store) into public.latest_opd_schedule
+async function saveScheduleToSupabase(payload) {
+    const storeId = `store_${payload.storeNumber || '1012'}`;
+    const res = await fetch(`${OPD_SUPABASE_URL}/rest/v1/latest_opd_schedule?on_conflict=store_id`, {
+        method: 'POST',
+        headers: {
+            'apikey': OPD_SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${OPD_SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal'
+        },
+        body: JSON.stringify({
+            store_id: storeId,
+            date: payload.date,
+            roster_name: payload.rosterName,
+            payload: payload,
+            updated_at: new Date().toISOString()
+        })
+    });
+    if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json()).message || ''; } catch (e) {}
+        throw new Error(detail || `HTTP ${res.status}`);
+    }
+}
+
+// Lightweight self-contained toast so export results are always visible
+function showExportToast(message, ok) {
+    const el = document.createElement('div');
+    el.textContent = message;
+    el.style.cssText = `position:fixed;right:20px;bottom:20px;max-width:380px;z-index:99999;padding:12px 16px;border-radius:10px;font:600 13px/1.4 Outfit,sans-serif;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.35);background:${ok ? '#15803d' : '#b91c1c'};transition:opacity .4s;`;
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; }, ok ? 4500 : 9000);
+    setTimeout(() => el.remove(), ok ? 5000 : 9500);
+}
+
