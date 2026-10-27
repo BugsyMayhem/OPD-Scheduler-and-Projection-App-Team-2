@@ -2321,6 +2321,62 @@ async function saveScheduleToSupabase(payload) {
         try { detail = (await res.json()).message || ''; } catch (e) {}
         throw new Error(detail || `HTTP ${res.status}`);
     }
+
+    // Also append to the Decision Dashboard's recent schedules history (last 4 schedules in dashboard_state)
+    try {
+        const historyRes = await fetch(`${OPD_SUPABASE_URL}/rest/v1/dashboard_state?id=eq.${storeId}_recent_schedules&select=slots`, {
+            headers: {
+                'apikey': OPD_SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${OPD_SUPABASE_ANON_KEY}`
+            }
+        });
+        let existing = [];
+        if (historyRes.ok) {
+            const historyData = await historyRes.json();
+            if (historyData?.[0]?.slots?.schedules) {
+                existing = historyData[0].slots.schedules;
+            }
+        }
+        const totalHours = (payload.slots || []).reduce((acc, s) => acc + (Number(s.scheduledPickers) || 0), 0);
+        const peak = Math.max(...(payload.slots || []).map(s => Number(s.scheduledPickers) || 0), 0);
+        const newHistoryItem = {
+            id: payload.id || (`sched_${Date.now()}`),
+            title: payload.rosterName || payload.store || 'OPD Schedule',
+            rosterName: payload.rosterName || `Daily Overview ${payload.date || ''}`.trim(),
+            store: payload.store || `Store ${payload.storeNumber || '1012'}`,
+            date: payload.date,
+            syncedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            totalStaffHours: totalHours,
+            peakPickers: peak,
+            slots: (payload.slots || []).map(sl => ({
+                id: sl.id,
+                hour: sl.hour || sl.hourLabel,
+                hourLabel: sl.hourLabel || sl.hour,
+                scheduledPickers: Number(sl.scheduledPickers) || 0,
+                pickerNames: sl.pickerNames || [],
+                availableBackroomStaff: sl.availableBackroomStaff || [],
+                availableStoreSupport: sl.availableStoreSupport || []
+            }))
+        };
+        const filtered = existing.filter(p => !(p.rosterName === newHistoryItem.rosterName && p.date === newHistoryItem.date && p.totalStaffHours === newHistoryItem.totalStaffHours));
+        const nextList = [newHistoryItem, ...filtered].slice(0, 4);
+        await fetch(`${OPD_SUPABASE_URL}/rest/v1/dashboard_state?on_conflict=id`, {
+            method: 'POST',
+            headers: {
+                'apikey': OPD_SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${OPD_SUPABASE_ANON_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'resolution=merge-duplicates,return=minimal'
+            },
+            body: JSON.stringify({
+                id: `${storeId}_recent_schedules`,
+                slots: { type: 'recent_schedules', schedules: nextList },
+                updated_at: new Date().toISOString()
+            })
+        });
+    } catch (histErr) {
+        console.warn("Non-blocking recent schedules history update failed:", histErr);
+    }
 }
 
 // Lightweight self-contained toast so export results are always visible
